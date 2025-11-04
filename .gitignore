@@ -1,0 +1,63 @@
+# Composer
+/vendor/
+composer.lock
+
+# IDEs and Editors
+/.idea/
+/.vscode/
+*.sublime-project
+*.sublime-workspace
+.DS_Store
+Thumbs.db
+
+# PHPUnit
+/.phpunit.cache/
+/phpunit.xml
+/coverage/
+.phpunit.result.cache
+.phpunit.cache
+.claude
+CLAUDE.md
+API_COMPLIANCE.md
+.env.example
+run-tests.sh
+/vendor/*
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Shell scripts
+*.sh
+
+# Ray debugging
+/ray-*.log
+/ray.php
+
+# Build artifacts
+/build/
+/dist/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Backup files
+*~
+*.bak
+*.swp
+*.swo
+.env.example
+tests/README.md
