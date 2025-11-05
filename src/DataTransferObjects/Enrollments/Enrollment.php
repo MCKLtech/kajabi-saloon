@@ -3,7 +3,9 @@
 namespace WooNinja\KajabiSaloon\DataTransferObjects\Enrollments;
 
 use Carbon\Carbon;
+use WooNinja\KajabiSaloon\Services\UserService;
 use WooNinja\LMSContracts\Contracts\DTOs\Enrollments\EnrollmentInterface;
+use WooNinja\LMSContracts\Contracts\DTOs\Users\UserInterface;
 
 final class Enrollment implements EnrollmentInterface
 {
@@ -40,15 +42,28 @@ final class Enrollment implements EnrollmentInterface
      * @param int $customerId Customer ID who received the offer
      * @param string $customerEmail Customer email
      * @param string $customerName Customer name
+     * @param UserInterface|null $contact
      * @return self
      */
-    public static function fromKajabiOffer(array $offer, int $customerId, string $customerEmail, string $customerName): self
+    public static function fromKajabiOffer(array $offer, int $customerId, string $customerEmail, string $customerName, ?UserInterface $contact = null): self
     {
         $offerId = (int)$offer['id'];
         $offerTitle = $offer['attributes']['title'] ?? $offer['attributes']['internal_title'] ?? '';
 
+        if(empty($customerEmail) && $contact) {
+            $customerEmail = $contact->email;
+        }
+
+        if(empty($customerName) && $contact) {
+            $customerName = $contact->getFullName();
+        }
+
+        if(empty($customerId) && $contact) {
+            $customerId = $contact->id;
+        }
+
         return new self(
-            id: (int)self::getEnrollmentId($offerId, $customerId),
+            id: self::getEnrollmentId($offerId, $customerId),
             user_email: $customerEmail,
             user_name: $customerName,
             user_id: $customerId, // This is customer_id

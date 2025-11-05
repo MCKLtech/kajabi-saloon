@@ -6,6 +6,7 @@ use Saloon\Enums\Method;
 use Saloon\Http\Request;
 use Saloon\PaginationPlugin\Contracts\Paginatable;
 use WooNinja\KajabiSaloon\DataTransferObjects\Enrollments\Enrollment;
+use WooNinja\LMSContracts\Contracts\DTOs\Users\UserInterface;
 
 /**
  * Get Enrollments (Offers granted) for a specific Contact
@@ -19,14 +20,16 @@ class GetContactOffers extends Request implements Paginatable
     protected Method $method = Method::GET;
 
     public function __construct(
-        private string $contactId,
-        private array $filters = [],
-        private ?string $defaultSiteId = null
-    ) {}
+        private UserInterface $contact,
+        private array         $filters = [],
+        private ?string       $defaultSiteId = null
+    )
+    {
+    }
 
     public function resolveEndpoint(): string
     {
-        return "/contacts/{$this->contactId}/relationships/offers";
+        return "/contacts/{$this->contact->id}/relationships/offers";
     }
 
     protected function defaultQuery(): array
@@ -74,9 +77,10 @@ class GetContactOffers extends Request implements Paginatable
         return array_map(function ($offer) {
             return Enrollment::fromKajabiOffer(
                 $offer,
-                (int)$this->contactId,
+                $this->contact->id,
                 '', // email not available in this response
-                ''  // name not available in this response
+                '',  // name not available in this response
+                $this->contact
             );
         }, $data);
     }

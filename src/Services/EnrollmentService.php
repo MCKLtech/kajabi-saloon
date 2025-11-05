@@ -255,28 +255,28 @@ class EnrollmentService extends Resource implements EnrollmentServiceInterface
         // Get contact ID
         $contactId = $user_id_or_email;
 
-        // If email provided, find the contact first
-        if (!is_numeric($user_id_or_email)) {
-            $userService = new UserService($this->kajabi);
+        $userService = new UserService($this->kajabi);
+
+        if(is_numeric($contactId)) {
+            $contact = $userService->get($contactId);
+        }
+        else {
             $contact = $userService->findByEmail($user_id_or_email);
-
-            if ($contact === null) {
-                // Return empty paginator
-                return $this->enrollments([
-                    'filter[customer_id]' => 0,
-                    'filter[created_at_gte]' => '2999-12-31T23:59:59Z',
-                    'page[size]' => 1
-                ]);
-            }
-
-            $contactId = $contact->id;
         }
 
+        if ($contact === null) {
+            // Return empty paginator
+            return $this->enrollments([
+                'filter[customer_id]' => 0,
+                'filter[created_at_gte]' => '2999-12-31T23:59:59Z',
+                'page[size]' => 1
+            ]);
+        }
 
         // Use the Contact → Offers relationship endpoint
         return $this->connector->paginate(
             new GetContactOffers(
-                (string)$contactId,
+                $contact,
                 $filters,
                 $this->getDefaultSiteId()
             )
