@@ -112,6 +112,101 @@ try {
 }
 ```
 
+### Access Token Caching
+
+For improved performance, you can cache the access token to avoid repeated OAuth requests:
+
+```php
+// Method 1: Manually authenticate and cache the token
+$kajabi = new KajabiService('client-id', 'client-secret', 'site-id');
+
+// Trigger authentication and get the token
+$accessToken = $kajabi->authenticate();
+
+// Cache the token (using your preferred caching system)
+Cache::put('kajabi_access_token', $accessToken, now()->addMinutes(60));
+
+echo "Token cached: {$accessToken}";
+```
+
+```php
+// Method 2: Restore a cached token to bypass authentication
+$kajabi = new KajabiService('client-id', 'client-secret', 'site-id');
+
+// Retrieve cached token
+$cachedToken = Cache::get('kajabi_access_token');
+
+if ($cachedToken) {
+    // Set the token directly - no OAuth request needed!
+    $kajabi->setAccessToken($cachedToken);
+    echo "Using cached token";
+} else {
+    // No cached token, authenticate and cache it
+    $accessToken = $kajabi->authenticate();
+    Cache::put('kajabi_access_token', $accessToken, now()->addMinutes(60));
+    echo "Authenticated and cached token";
+}
+
+// All subsequent API calls will use the token
+$users = $kajabi->users->users();
+```
+
+```php
+// Method 3: Complete caching workflow
+function getKajabiService($clientId, $clientSecret, $siteId)
+{
+    $kajabi = new KajabiService($clientId, $clientSecret, $siteId);
+    
+    // Check if we have a cached token
+    $cachedToken = Cache::get('kajabi_access_token');
+    
+    if ($cachedToken) {
+        // Use cached token
+        $kajabi->setAccessToken($cachedToken);
+    } else {
+        // Authenticate and cache the token
+        $token = $kajabi->authenticate();
+        
+        if ($token) {
+            // Cache for ~60 minutes (tokens typically expire in 7 days)
+            Cache::put('kajabi_access_token', $token, now()->addMinutes(60));
+        }
+    }
+    
+    return $kajabi;
+}
+
+// Usage
+$kajabi = getKajabiService('client-id', 'client-secret', 'site-id');
+$users = $kajabi->users->users();
+```
+
+```php
+// Method 4: Retrieve token after first API call
+$kajabi = new KajabiService('client-id', 'client-secret', 'site-id');
+
+// Make any API call (authentication happens automatically)
+$users = $kajabi->users->users();
+
+// Now retrieve and cache the token for future use
+$accessToken = $kajabi->getAccessToken();
+if ($accessToken) {
+    Cache::put('kajabi_access_token', $accessToken, now()->addMinutes(60));
+}
+```
+
+**Benefits of Token Caching:**
+- ⚡ Faster API requests (skip OAuth flow)
+- 🔒 Reduced authentication requests
+- 📊 Better rate limit utilization
+
+**Important Notes:**
+- Cache tokens securely (never in version control)
+- Consider shorter cache TTL (e.g., 1 hour) for security
+- Use `setAccessToken()` to restore cached tokens
+- Use `getAccessToken()` to retrieve current token for caching
+- Use `authenticate()` to manually trigger OAuth and get a fresh token
+
 ## Configuration
 
 ### Global Site ID

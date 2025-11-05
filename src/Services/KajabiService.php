@@ -28,6 +28,7 @@ final class KajabiService implements Kajabi, LMSServiceInterface
     public OfferService $offers;
     public SiteService $sites;
     public WebhookService $webhooks;
+    public CustomProfileFieldDefinitionService $custom_profile_field_definitions;
 
     // Compatibility stub services (Kajabi doesn't support these features)
     public BundleService $bundles;
@@ -35,13 +36,11 @@ final class KajabiService implements Kajabi, LMSServiceInterface
     public ContentService $contents;
     public CouponService $coupons;
     public CourseReviewService $courseReviews;
-    public CustomProfileFieldDefinitionService $custom_profile_field_definitions;
     public GroupService $groups;
     public InstructorService $instructors;
     public PromotionService $promotions;
     public SiteScriptService $siteScripts;
     public OAuthService $oauth;
-
     private KajabiConnector|bool $connector = false;
     private Authenticator|bool $authenticator = false;
 
@@ -110,10 +109,12 @@ final class KajabiService implements Kajabi, LMSServiceInterface
             return $this->authenticator;
         }
 
-        return new KajabiAuthenticator(
+        $this->authenticator = new KajabiAuthenticator(
             $this->clientId,
             $this->clientSecret
         );
+        
+        return $this->authenticator;
     }
 
     /**
@@ -147,6 +148,61 @@ final class KajabiService implements Kajabi, LMSServiceInterface
     {
         $this->connector = false;
         $this->authenticator = false;
+    }
+
+    /**
+     * Get the current access token
+     *
+     * @return string|null
+     */
+    public function getAccessToken(): ?string
+    {
+        $authenticator = $this->authenticator();
+        
+        if ($authenticator instanceof KajabiAuthenticator) {
+            return $authenticator->getAccessToken();
+        }
+        
+        return null;
+    }
+
+    /**
+     * Set the access token to bypass authentication
+     *
+     * @param string $token
+     * @return void
+     */
+    public function setAccessToken(string $token): void
+    {
+        $authenticator = $this->authenticator();
+        
+        if ($authenticator instanceof KajabiAuthenticator) {
+            $authenticator->setAccessToken($token);
+        }
+    }
+
+    /**
+     * Manually authenticate and retrieve access token
+     * Useful for caching the token before making API requests
+     *
+     * @return string|null
+     */
+    public function authenticate(): ?string
+    {
+        $authenticator = $this->authenticator();
+        
+        if ($authenticator instanceof KajabiAuthenticator) {
+            $authenticator->connector = $this->connector();
+            // Trigger authentication by calling the private authenticate method via reflection
+            $reflection = new \ReflectionClass($authenticator);
+            $method = $reflection->getMethod('authenticate');
+            $method->setAccessible(true);
+            $method->invoke($authenticator);
+            
+            return $authenticator->getAccessToken();
+        }
+        
+        return null;
     }
 
     /**

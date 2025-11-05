@@ -43,6 +43,7 @@ class KajabiAuthenticator implements Authenticator
         $this->isAuthenticating = true;
 
         try {
+
             $response = $this->connector->send(new GetToken(
                 $this->clientId,
                 $this->clientSecret
