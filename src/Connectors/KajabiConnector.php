@@ -2,20 +2,18 @@
 
 namespace WooNinja\KajabiSaloon\Connectors;
 
-use ReflectionClass;
 use Saloon\Http\Connector;
 use Saloon\Http\Request;
 use Saloon\PaginationPlugin\Contracts\HasPagination;
 use Saloon\PaginationPlugin\CursorPaginator;
-use Saloon\PaginationPlugin\Paginator;
 use Saloon\Http\Response;
+use Saloon\PaginationPlugin\Traits\HasAsyncPagination;
 use Saloon\RateLimitPlugin\Contracts\RateLimitStore;
 use Saloon\RateLimitPlugin\Limit;
 use Saloon\RateLimitPlugin\Stores\MemoryStore;
 use Saloon\RateLimitPlugin\Traits\HasRateLimits;
 use Saloon\Traits\Plugins\AcceptsJson;
 use Saloon\Traits\Plugins\AlwaysThrowOnErrors;
-use Saloon\Config;
 
 class KajabiConnector extends Connector implements HasPagination
 {
@@ -130,62 +128,66 @@ class KajabiConnector extends Connector implements HasPagination
     public function paginate(Request $request): CursorPaginator
     {
         $paginator = new class(connector: $this, request: $request) extends CursorPaginator {
-
             private int $pageItemsKey;
             private array $pageItems;
-            protected ?int $perPageLimit = 100;
-            private int $pagesReturned = 0;
-            protected int|null $maxPages = null;
-            protected int $totalResults = 0;
+            protected ?int $perPageLimit = 50;
 
             /**
-             * Get the next cursor (next page URL) from response
+             * Override count() to use async to avoid looping all pages
              *
-             * @param Response $response
-             * @return int|string
+             * @return int
              */
+            public function count() : int
+            {
+                $this->async();
+
+                $count = parent::count();
+
+                $this->async(false);
+
+                return $count;
+            }
+
+            public function getPerPageLimit(): int
+            {
+                return $this->perPageLimit;
+            }
+
+            public function getTotalAPIResults(): int
+            {
+                return $this->currentResponse->json('meta.total', 0);
+            }
+
+            public function getTotalAPIPages(): int
+            {
+                $total = $this->currentResponse->json('meta.total', 0);
+
+                if ($total === 0) {
+                    return 1;
+                }
+
+                // Calculate from total records and page size
+                $pageSize = $this->perPageLimit ?? 100;
+
+                return (int)ceil($total / $pageSize);
+            }
+
             protected function getNextCursor(Response $response): int|string
             {
-                // Check if we've reached max pages limit
-                if ($this->maxPages !== null && $this->pagesReturned >= $this->maxPages) {
-                    return '';
-                }
-
-                // Get next link from response
-                // Response: "links": { "next": "https://api.kajabi.com/v1/contacts?page[number]=2&page[size]=2" }
-                $nextLink = $response->json('links.next');
-
-                // No next link means we're on the last page
-                return $nextLink ?? '';
+                return $response->json('links.next');
             }
 
-            /**
-             * Check if we've reached the last page
-             *
-             * @param Response $response
-             * @return bool
-             */
             protected function isLastPage(Response $response): bool
             {
-                // Check max pages limit
-                if ($this->maxPages !== null && $this->pagesReturned >= $this->maxPages) {
-                    return true;
-                }
-
-                // No "next" link in response means last page
-                return !$response->json('links.next');
+                return empty($response->json('links.next'));
             }
 
-            /**
-             * Extract items from response and transform to DTOs
-             *
-             * @param Response $response
-             * @param Request $request
-             * @return array
-             */
             protected function getPageItems(Response $response, Request $request): array
             {
-                // Cache check to avoid double API calls
+                /**
+                 * This is a workaround to avoid a double API call when using the paginator.
+                 * @see https://github.com/saloonphp/saloon/discussions/449
+                 */
                 $cacheKey = spl_object_id($response);
 
                 if (isset($this->pageItemsKey) && $this->pageItemsKey === $cacheKey) {
@@ -193,31 +195,18 @@ class KajabiConnector extends Connector implements HasPagination
                 }
 
                 $this->pageItemsKey = $cacheKey;
-
-                // Transform response data to DTOs
                 $this->pageItems = $response->dtoOrFail();
-
-                // Store total from meta (default to 0 if not present)
-                $this->totalResults = $response->json('meta.total') ?? 0;
-
-                // Increment page counter
-                $this->pagesReturned++;
-
                 return $this->pageItems;
             }
 
-            /**
-             * Apply pagination to request
-             *
-             * First request: Uses page[size] from filters
-             * Subsequent requests: Uses full URL from links.next
-             *
-             * @param Request $request
-             * @return Request
-             */
+            protected function getTotalPages(Response $response): int
+            {
+                return $this->getTotalAPIPages();
+            }
+
             protected function applyPagination(Request $request): Request
             {
-                // If we have a response (not first request), use next link
+                // If we have a response (not first request), use next link URL
                 if ($this->currentResponse instanceof Response) {
                     $nextUrl = $this->getNextCursor($this->currentResponse);
 
@@ -228,58 +217,65 @@ class KajabiConnector extends Connector implements HasPagination
                         if (isset($parsedUrl['query'])) {
                             parse_str($parsedUrl['query'], $queryParams);
 
-                            // Clear existing pagination params and add from next URL
+                            // Add all query params from next URL to request
                             foreach ($queryParams as $key => $value) {
                                 $request->query()->add($key, $value);
                             }
                         }
                     }
                 } else {
-                    // First request: add page[size] parameter
-                    if ($this->perPageLimit !== null) {
+                    // First request: read filters and apply pagination
+                    $filters = $request->query()->all();
+
+                    // Set per page limit - check both 'limit' (Thinkific) and 'page[size]' (Kajabi)
+                    $limit = $filters['limit'] ?? $filters['page[size]'] ?? $this->perPageLimit;
+                    $this->setPerPageLimit($limit);
+
+                    // Add page[size] parameter for Kajabi API
+                    if (is_numeric($this->perPageLimit)) {
                         $request->query()->add('page[size]', $this->perPageLimit);
+                    }
+
+                    // Add page[number] for first request - check both 'page' (Thinkific) and 'page[number]' (Kajabi)
+                    $pageNumber = $filters['page'] ?? $filters['page[number]'] ?? $filters['start_page'] ?? null;
+                    if ($pageNumber) {
+                        $request->query()->add('page[number]', $pageNumber);
                     }
                 }
 
                 return $request;
             }
 
-            /**
-             * Get total number of results from meta.total
-             *
-             * @return int
-             */
-            public function getTotalResults(): int
-            {
-                return $this->totalResults;
-            }
-
-            /**
-             * Set maximum number of pages to fetch
-             *
-             * @param int|null $maxPages
-             * @return Paginator
-             */
-            public function setMaxPages(int|null $maxPages): Paginator
-            {
-                $this->maxPages = $maxPages;
-                return $this;
-            }
-
         };
 
-        // Extract filters from request query
         $filters = $request->query()->all();
 
-        // Set page size (items per page)
-        $pageSize = $filters['limit'] ?? 100;
-        $paginator->setPerPageLimit($pageSize);
+        // Check for start page - Kajabi 'page[number]' or Thinkific 'page' or 'start_page'
+        $startPage = $filters['page[number]'] ?? $filters['page'] ?? $filters['start_page'] ?? 1;
+        $paginator->setStartPage($startPage);
 
-        // Set maximum pages to fetch (default: null = all pages)
+        // Check for page limit - Kajabi 'page[size]' or Thinkific 'limit'
+        $pageLimit = $filters['page[size]'] ?? $filters['limit'] ?? $paginator->getPerPageLimit() ?? 100;
+        $paginator->setPerPageLimit($pageLimit);
+
+        $paginator->rewind();
+
         if (isset($filters['max_pages'])) {
-            $paginator->setMaxPages($filters['max_pages']);
+
+            /**
+             * We add on the max_pages otherwise we may already be at the 'max' page
+             */
+            $currentPage = $paginator->getCurrentPage();
+
+            $paginator->setMaxPages($currentPage + $filters['max_pages']);
+
+            /**
+             * One good rewind deserves another
+             */
+            $paginator->rewind();
         }
 
         return $paginator;
+
     }
 }

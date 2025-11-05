@@ -51,7 +51,6 @@ class CreateContact extends Request implements HasBody
 
     public function createDtoFromResponse($response): User
     {
-        ray($response->json());
         return User::fromKajabiContact($response->json('data', []));
     }
 }
