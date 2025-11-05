@@ -33,13 +33,25 @@ class GetContactOffers extends Request implements Paginatable
     {
         $query = [];
 
-        // Map filters
+        // Map Thinkific-style filters to Kajabi filters
         foreach ($this->filters as $key => $value) {
             switch ($key) {
+                case 'limit':
+                    $query['page[size]'] = $value;
+                    break;
+                case 'page':
+                    $query['page[number]'] = $value;
+                    break;
                 case 'site_id':
                     $query['filter[site_id]'] = $value;
                     break;
+                // Skip pagination parameters that will be handled by paginator
+                case 'start_page':
+                case 'max_pages':
+                    // These are paginator control parameters, not API parameters
+                    break;
                 default:
+                    // Pass through other filters as-is
                     $query[$key] = $value;
                     break;
             }

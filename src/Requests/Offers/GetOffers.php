@@ -23,6 +23,10 @@ class GetOffers extends Request implements Paginatable
                 case 'limit': $query['page[size]'] = $value; break;
                 case 'page': $query['page[number]'] = $value; break;
                 case 'site_id': $query['filter[site_id]'] = $value; break;
+                // Skip pagination control parameters (handled by paginator, not API)
+                case 'start_page':
+                case 'max_pages':
+                    break;
                 default: $query[$key] = $value; break;
             }
         }
