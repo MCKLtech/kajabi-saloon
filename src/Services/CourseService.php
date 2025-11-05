@@ -5,6 +5,7 @@ namespace WooNinja\KajabiSaloon\Services;
 use Saloon\Exceptions\Request\FatalRequestException;
 use Saloon\Exceptions\Request\RequestException;
 use Saloon\PaginationPlugin\Paginator;
+use WooNinja\KajabiSaloon\DataTransferObjects\Courses\Course;
 use WooNinja\KajabiSaloon\Requests\Offers\GetOffer;
 use WooNinja\KajabiSaloon\Requests\Offers\GetOffers;
 use WooNinja\LMSContracts\Contracts\Services\CourseServiceInterface;
@@ -53,7 +54,7 @@ class CourseService extends Resource implements CourseServiceInterface
 
         // Transform Offer to Course DTO for CourseInterface compatibility
         // We use Course::fromKajabiOffer() which transforms offer to course structure
-        return \WooNinja\KajabiSaloon\DataTransferObjects\Courses\Course::fromKajabiOffer($offerData);
+        return Course::fromKajabiOffer($offerData);
     }
 
     /**

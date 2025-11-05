@@ -35,7 +35,7 @@ final class KajabiService implements Kajabi, LMSServiceInterface
     public ContentService $contents;
     public CouponService $coupons;
     public CourseReviewService $courseReviews;
-    public CustomProfileFieldDefinitionService $customProfileFieldDefinitions;
+    public CustomProfileFieldDefinitionService $custom_profile_field_definitions;
     public GroupService $groups;
     public InstructorService $instructors;
     public PromotionService $promotions;
@@ -66,6 +66,7 @@ final class KajabiService implements Kajabi, LMSServiceInterface
         $this->offers = new OfferService($this);
         $this->sites = new SiteService($this);
         $this->webhooks = new WebhookService($this);
+        $this->custom_profile_field_definitions = new CustomProfileFieldDefinitionService($this);
 
         // Compatibility stub services (Thinkific features not available in Kajabi)
         $this->bundles = new BundleService($this);
@@ -73,7 +74,7 @@ final class KajabiService implements Kajabi, LMSServiceInterface
         $this->contents = new ContentService($this);
         $this->coupons = new CouponService($this);
         $this->courseReviews = new CourseReviewService($this);
-        $this->customProfileFieldDefinitions = new CustomProfileFieldDefinitionService($this);
+
         $this->groups = new GroupService($this);
         $this->instructors = new InstructorService($this);
         $this->promotions = new PromotionService($this);

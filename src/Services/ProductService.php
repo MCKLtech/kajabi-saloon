@@ -5,6 +5,7 @@ namespace WooNinja\KajabiSaloon\Services;
 use Saloon\Exceptions\Request\FatalRequestException;
 use Saloon\Exceptions\Request\RequestException;
 use Saloon\PaginationPlugin\Paginator;
+use WooNinja\KajabiSaloon\DataTransferObjects\Courses\Course;
 use WooNinja\KajabiSaloon\Requests\Offers\GetOffer;
 use WooNinja\KajabiSaloon\Requests\Offers\GetOffers;
 use WooNinja\LMSContracts\Contracts\Services\ProductServiceInterface;
@@ -65,22 +66,25 @@ class ProductService extends Resource implements ProductServiceInterface
     /**
      * Return the Course(s) associated with a Product
      *
-     * Since "Products" are actually Offers, this returns the given Offer itself.
+     * Since "Products" are actually Offers in Kajabi, this fetches the Offer
+     * and transforms it into a Course DTO (CourseInterface) for compatibility.
      * A "Product" (Offer) has one "Course" (itself) that users enroll in.
      *
      * @param int $product_id Offer ID
-     * @return array Array containing the single Offer
+     * @return array<Course> Array containing Course DTOs (CourseInterface)
      * @throws FatalRequestException
      * @throws RequestException
      */
     public function courses(int $product_id): array
     {
-        // Get the Offer and return it as the single course for this product
-        $offer = $this->connector
-            ->send(new GetOffer($product_id))
-            ->dtoOrFail();
+        // Get the raw Offer response data (not the DTO)
+        $response = $this->connector->send(new GetOffer($product_id));
+        $offerData = $response->json('data');
 
-        return [$offer];
+        // Transform Offer data into Course DTO (CourseInterface) instead of Offer DTO (ProductInterface)
+        $course = Course::fromKajabiOffer($offerData);
+
+        return [$course];
     }
 
     /**

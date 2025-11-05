@@ -3,6 +3,8 @@
 namespace WooNinja\KajabiSaloon\Services;
 
 use Saloon\PaginationPlugin\Paginator;
+use WooNinja\KajabiSaloon\DataTransferObjects\CustomProfileFieldDefinitions\CustomProfileFieldDefinition;
+use WooNinja\KajabiSaloon\Requests\CustomFields\GetCustomFields;
 
 /**
  * Custom Profile Field Definition Service
@@ -15,14 +17,16 @@ class CustomProfileFieldDefinitionService extends Resource
     /**
      * Get Custom Profile Field Definitions
      *
-     * Note: Kajabi API endpoint is /v1/custom_fields
+     * Fetches custom fields from Kajabi API and transforms them to Thinkific format.
+     * Maps Kajabi's /v1/custom_fields to Thinkific's custom profile field definitions.
      *
-     * @param array $filters
-     * @return Paginator
-     * @throws \Exception
+     * @param array $filters Optional filters: site_id, limit, page
+     * @return Paginator<CustomProfileFieldDefinition>
      */
-    public function customProfileFieldDefinitions(array $filters = []): Paginator
+    public function definitions(array $filters = []): Paginator
     {
-        throw new \Exception('Custom Profile Field Definitions API not yet implemented for Kajabi. Use /v1/custom_fields endpoint directly.');
+        return $this->connector->paginate(
+            new GetCustomFields($filters, $this->getDefaultSiteId())
+        );
     }
 }
