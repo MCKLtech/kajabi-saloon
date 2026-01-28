@@ -2,6 +2,7 @@
 
 namespace WooNinja\KajabiSaloon\DataTransferObjects\Users;
 
+use Carbon\Carbon;
 use WooNinja\LMSContracts\Contracts\DTOs\Users\UserInterface;
 
 final class User implements UserInterface
@@ -23,6 +24,7 @@ final class User implements UserInterface
         public ?string $affiliate_commission_type,
         public ?string $affiliate_payout_email,
         public ?array  $custom_profile_fields,
+        public ?Carbon $created_at = null,
         // Additional Kajabi-specific fields
         public ?string $phone_number = null,
         public ?bool   $subscribed = null,
@@ -33,8 +35,7 @@ final class User implements UserInterface
         public ?string $address_country = null,
         public ?string $address_zip = null,
         public ?string $business_number = null,
-        public ?string $created_at = null,
-        public ?string $updated_at = null,
+        public ?Carbon $updated_at = null,
     )
     {
     }
@@ -90,6 +91,9 @@ final class User implements UserInterface
                 'custom_2' => $contact['attributes']['custom_2'] ?? null,
                 'custom_3' => $contact['attributes']['custom_3'] ?? null,
             ],
+            created_at: isset($contact['attributes']['created_at'])
+                ? Carbon::parse($contact['attributes']['created_at'])
+                : null,
             // Kajabi-specific fields
             phone_number: $contact['attributes']['phone_number'] ?? null,
             subscribed: $contact['attributes']['subscribed'] ?? null,
@@ -100,8 +104,9 @@ final class User implements UserInterface
             address_country: $contact['attributes']['address_country'] ?? null,
             address_zip: $contact['attributes']['address_zip'] ?? null,
             business_number: $contact['attributes']['business_number'] ?? null,
-            created_at: $contact['attributes']['created_at'] ?? null,
-            updated_at: $contact['attributes']['updated_at'] ?? null,
+            updated_at: isset($contact['attributes']['updated_at'])
+                ? Carbon::parse($contact['attributes']['updated_at'])
+                : null,
         );
     }
 }

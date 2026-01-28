@@ -64,7 +64,7 @@ final class Course implements CourseInterface
             name: $offer['attributes']['title'] ?? $offer['attributes']['internal_title'] ?? 'Untitled Offer',
             slug: $offer['attributes']['token'] ?? '',
             subtitle: null,
-            product_id: $firstProductId, // First product in the offer
+            product_id: (int) $offer['id'], //Offer ID
             description: $offer['attributes']['description'] ?? null,
             course_card_text: $offer['attributes']['description'] ?? null,
             intro_video_youtube: null,

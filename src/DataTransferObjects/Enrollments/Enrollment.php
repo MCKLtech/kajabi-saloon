@@ -71,7 +71,7 @@ final class Enrollment implements EnrollmentInterface
             course_id: $offerId, // course_id is offer_id
             percentage_completed: 0.0,
             expired: false,
-            is_free_trial: ($offer['attributes']['price_in_cents'] ?? 0) == 0,
+            is_free_trial: false, //Concept of free trial does not exist in Kajabi
             completed: false,
             started_at: Carbon::now(), // Granted now
             activated_at: Carbon::now(),
@@ -175,7 +175,7 @@ final class Enrollment implements EnrollmentInterface
             course_id: $courseId, // This is the offer_id
             percentage_completed: 0.0, // Kajabi doesn't track completion percentage the same way
             expired: $status === 'deactivated',
-            is_free_trial: ($purchase['attributes']['amount_in_cents'] ?? 0) == 0,
+            is_free_trial: false, //Concept of free trial does not exist in Kajabi
             completed: false, // Kajabi purchases don't have a completed state
             started_at: isset($purchase['attributes']['effective_start_at'])
                 ? Carbon::parse($purchase['attributes']['effective_start_at'])
