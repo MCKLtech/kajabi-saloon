@@ -12,9 +12,11 @@ use WooNinja\LMSContracts\Contracts\Services\CourseServiceInterface;
 use WooNinja\LMSContracts\Contracts\Services\EnrollmentServiceInterface;
 use WooNinja\LMSContracts\Contracts\Services\ProductServiceInterface;
 use WooNinja\LMSContracts\Contracts\Services\OrderServiceInterface;
+use WooNinja\KajabiSaloon\Traits\MapperTrait;
 
 final class KajabiService implements Kajabi, LMSServiceInterface
 {
+    use MapperTrait;
     private string $clientId;
     private string $clientSecret;
     private ?string $siteId;
