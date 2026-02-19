@@ -166,4 +166,128 @@ class EnrollmentTest extends TestCase
         // Kajabi-specific field preserved
         $this->assertEquals('active', $enrollment->status);
     }
+
+    public function test_get_enrollment_id_generates_unique_id(): void
+    {
+        $id1 = Enrollment::getEnrollmentId(100, 200);
+        $id2 = Enrollment::getEnrollmentId(100, 201);
+        $id3 = Enrollment::getEnrollmentId(101, 200);
+
+        // All IDs should be unique
+        $this->assertNotEquals($id1, $id2);
+        $this->assertNotEquals($id1, $id3);
+        $this->assertNotEquals($id2, $id3);
+    }
+
+    public function test_get_enrollment_id_is_deterministic(): void
+    {
+        $id1 = Enrollment::getEnrollmentId(12345, 67890);
+        $id2 = Enrollment::getEnrollmentId(12345, 67890);
+
+        // Same inputs should always produce same output
+        $this->assertEquals($id1, $id2);
+    }
+
+    public function test_get_enrollment_id_handles_large_kajabi_ids(): void
+    {
+        // Real-world Kajabi IDs that caused overflow
+        $offerId = 2150553057;
+        $contactId = 2670937203;
+
+        $enrollmentId = Enrollment::getEnrollmentId($offerId, $contactId);
+
+        // Should NOT be PHP_INT_MAX (the overflow value)
+        $this->assertNotEquals(PHP_INT_MAX, $enrollmentId);
+
+        // Should be a valid string representation of the concatenated IDs
+        $this->assertEquals('21505530572670937203', $enrollmentId);
+    }
+
+    public function test_get_enrollment_id_returns_string_type(): void
+    {
+        $enrollmentId = Enrollment::getEnrollmentId(2150553057, 2670937203);
+
+        // Must be string to avoid integer overflow
+        $this->assertIsString($enrollmentId);
+    }
+
+    public function test_enrollment_from_purchase_uses_string_id_for_large_ids(): void
+    {
+        $purchaseData = KajabiApiResponses::purchase();
+
+        // Use large IDs that would overflow as integers
+        $purchaseData['relationships']['offer']['data']['id'] = '2150553057';
+        $purchaseData['relationships']['customer']['data']['id'] = '2670937203';
+
+        // Need to add customer to included map for contact_id extraction
+        $includedMap = [
+            'customers:2670937203' => [
+                'id' => '2670937203',
+                'type' => 'customers',
+                'attributes' => [
+                    'email' => 'test@example.com',
+                    'name' => 'Test User',
+                ],
+                'relationships' => [
+                    'contact' => [
+                        'data' => ['id' => '2670937203', 'type' => 'contacts']
+                    ]
+                ]
+            ],
+            'offers:2150553057' => [
+                'id' => '2150553057',
+                'type' => 'offers',
+                'attributes' => [
+                    'title' => 'Test Offer',
+                ]
+            ]
+        ];
+
+        $enrollment = Enrollment::fromKajabiPurchase($purchaseData, $includedMap);
+
+        // The enrollment ID should be a string, not truncated to PHP_INT_MAX
+        $this->assertEquals('21505530572670937203', $enrollment->id);
+        $this->assertNotEquals(PHP_INT_MAX, $enrollment->id);
+    }
+
+    public function test_enrollment_from_offer_uses_string_id_for_large_ids(): void
+    {
+        $offerData = KajabiApiResponses::offer();
+        $offerData['id'] = 2150553057;
+
+        $customerId = 2670937203;
+        $customerEmail = 'test@example.com';
+        $customerName = 'Test User';
+
+        $enrollment = Enrollment::fromKajabiOffer(
+            $offerData,
+            $customerId,
+            $customerEmail,
+            $customerName
+        );
+
+        // The enrollment ID should be a string, not truncated to PHP_INT_MAX
+        $this->assertEquals('21505530572670937203', $enrollment->id);
+        $this->assertNotEquals(PHP_INT_MAX, $enrollment->id);
+    }
+
+    public function test_multiple_large_id_enrollments_are_unique(): void
+    {
+        // Simulate multiple enrollments for same user with different offers
+        $contactId = 2670937203;
+        $offerIds = [2150553057, 2150553059, 2150540451, 2150527498];
+
+        $enrollmentIds = [];
+        foreach ($offerIds as $offerId) {
+            $enrollmentIds[] = Enrollment::getEnrollmentId($offerId, $contactId);
+        }
+
+        // All enrollment IDs should be unique
+        $this->assertCount(4, array_unique($enrollmentIds));
+
+        // None should be PHP_INT_MAX
+        foreach ($enrollmentIds as $id) {
+            $this->assertNotEquals(PHP_INT_MAX, $id);
+        }
+    }
 }

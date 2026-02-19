@@ -10,27 +10,27 @@ use WooNinja\LMSContracts\Contracts\DTOs\Users\UserInterface;
 final class Enrollment implements EnrollmentInterface
 {
     public function __construct(
-        public int     $id,
-        public string  $user_email,
-        public string  $user_name,
-        public int     $user_id,
-        public string  $course_name,
-        public int     $course_id,
-        public float   $percentage_completed,
-        public bool    $expired,
-        public bool    $is_free_trial,
-        public bool    $completed,
-        public ?Carbon $started_at,
-        public ?Carbon $activated_at,
-        public ?Carbon $completed_at,
-        public Carbon  $updated_at,
-        public ?Carbon $expiry_date,
-        public ?string $credential_id,
-        public ?string $certificate_url,
-        public ?Carbon $certificate_expiry_date,
+        public int|string $id,
+        public string     $user_email,
+        public string     $user_name,
+        public int        $user_id,
+        public string     $course_name,
+        public int        $course_id,
+        public float      $percentage_completed,
+        public bool       $expired,
+        public bool       $is_free_trial,
+        public bool       $completed,
+        public ?Carbon    $started_at,
+        public ?Carbon    $activated_at,
+        public ?Carbon    $completed_at,
+        public Carbon     $updated_at,
+        public ?Carbon    $expiry_date,
+        public ?string    $credential_id,
+        public ?string    $certificate_url,
+        public ?Carbon    $certificate_expiry_date,
         // Additional Kajabi-specific fields
-        public ?string $status = null,
-        public ?string $created_at = null,
+        public ?string    $status = null,
+        public ?string    $created_at = null,
     )
     {
     }
@@ -50,15 +50,15 @@ final class Enrollment implements EnrollmentInterface
         $offerId = (int)$offer['id'];
         $offerTitle = $offer['attributes']['title'] ?? $offer['attributes']['internal_title'] ?? '';
 
-        if(empty($customerEmail) && $contact) {
+        if (empty($customerEmail) && $contact) {
             $customerEmail = $contact->email;
         }
 
-        if(empty($customerName) && $contact) {
+        if (empty($customerName) && $contact) {
             $customerName = $contact->getFullName();
         }
 
-        if(empty($customerId) && $contact) {
+        if (empty($customerId) && $contact) {
             $customerId = $contact->id;
         }
 
@@ -86,9 +86,9 @@ final class Enrollment implements EnrollmentInterface
         );
     }
 
-    public static function getEnrollmentId($offerId, $contactId): int
+    public static function getEnrollmentId($offerId, $contactId): string
     {
-        return (int)"{$offerId}{$contactId}";
+        return "{$offerId}{$contactId}";
     }
 
     /**
