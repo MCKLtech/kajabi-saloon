@@ -142,7 +142,18 @@ class DTOInterfaceComplianceTest extends TestCase
         $purchaseData = KajabiApiResponses::purchase();
         $enrollment = Enrollment::fromKajabiPurchase($purchaseData);
 
+        // Every property documented by EnrollmentInterface must be directly accessible
+        // (Thinkific-compatible "getter" model: public promoted properties)
+        $expectedProperties = [
+            'id', 'user_email', 'user_name', 'user_id', 'course_name', 'course_id',
+            'percentage_completed', 'expired', 'is_free_trial', 'completed',
+            'started_at', 'activated_at', 'completed_at', 'updated_at', 'expiry_date',
+            'credential_id', 'certificate_url', 'certificate_expiry_date',
+        ];
 
+        foreach ($expectedProperties as $property) {
+            $this->assertObjectHasProperty($property, $enrollment);
+        }
     }
 
     // ==================== Required Fields Tests ====================
@@ -233,7 +244,9 @@ class DTOInterfaceComplianceTest extends TestCase
         $purchaseData = KajabiApiResponses::purchase();
         $enrollment = Enrollment::fromKajabiPurchase($purchaseData);
 
-        $this->assertIsInt($enrollment->id);
+        // Enrollment ID is a string (concatenated offer_id + contact_id to
+        // avoid integer overflow on large Kajabi IDs; interface allows int|string)
+        $this->assertIsString($enrollment->id);
         $this->assertIsInt($enrollment->user_id);
         $this->assertIsInt($enrollment->course_id);
         $this->assertIsString($enrollment->user_email);

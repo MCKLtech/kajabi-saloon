@@ -104,8 +104,8 @@ final class Enrollment implements EnrollmentInterface
         // Extract user information from relationships and included data
         $userId = 0;
         $contactId = null;
-        $userEmail = '';
-        $userName = '';
+        $userEmail = $purchase['attributes']['customer_email'] ?? '';
+        $userName = $purchase['attributes']['customer_name'] ?? '';
 
         if (isset($purchase['relationships']['customer']['data']['id'])) {
             $customerId = $purchase['relationships']['customer']['data']['id'];
@@ -115,11 +115,11 @@ final class Enrollment implements EnrollmentInterface
             $customerKey = "customers:{$customerId}";
             if (isset($includedMap[$customerKey])) {
                 $customerData = $includedMap[$customerKey];
-                // Extract email and name from customer data
-                $userEmail = $customerData['attributes']['email'] ?? '';
+                // Extract email and name from customer data (fall back to purchase attributes)
+                $userEmail = $customerData['attributes']['email'] ?? $userEmail;
 
                 // Kajabi stores name as a single field
-                $userName = $customerData['attributes']['name'] ?? '';
+                $userName = $customerData['attributes']['name'] ?? $userName;
 
                 // If name is empty, try to construct from first_name and last_name if available
                 if (empty($userName)) {
@@ -138,58 +138,68 @@ final class Enrollment implements EnrollmentInterface
         $contactId = $contactId ?? $userId;
 
         // Extract offer_id and offer details from relationships
-        // In our architecture, course_id = offer_id
+        // In our architecture, course_id = product_id (the product purchased)
+        // while the offer is the pricing/access bundle the purchase used
         $courseId = 0;
-        $courseName = '';
+        $courseName = $purchase['attributes']['product_name'] ?? '';
         $offerId = null;
+
+        if (isset($purchase['relationships']['product']['data']['id'])) {
+            $courseId = (int)$purchase['relationships']['product']['data']['id'];
+        } elseif (isset($purchase['relationships']['offer']['data']['id'])) {
+            $courseId = (int)$purchase['relationships']['offer']['data']['id'];
+        }
 
         if (isset($purchase['relationships']['offer']['data']['id'])) {
             $offerId = $purchase['relationships']['offer']['data']['id'];
-            $courseId = (int)$offerId;
 
             // Try to get offer details from included data (if available via ?include=offer)
             $offerKey = "offers:{$offerId}";
             if (isset($includedMap[$offerKey])) {
                 $offerData = $includedMap[$offerKey];
-                // Get offer title as course name
+                // Get offer title as course name (fall back to purchase product_name)
                 $courseName = $offerData['attributes']['title']
                     ?? $offerData['attributes']['internal_title']
-                    ?? '';
+                    ?? $courseName;
             }
         }
-
-        // Determine enrollment status
-        $deactivatedAt = $purchase['attributes']['deactivated_at'] ?? null;
-        $status = $deactivatedAt ? 'deactivated' : 'active';
 
         if ($offerId === null) {
             throw new \Exception('Invalid purchase data: missing offer_id');
         }
 
+        // Determine enrollment status from the purchase's own status field
+        $deactivatedAt = $purchase['attributes']['deactivated_at'] ?? null;
+        $status = $purchase['attributes']['status'] ?? ($deactivatedAt ? 'deactivated' : 'active');
+        $expired = in_array($status, ['expired', 'cancelled', 'deactivated'], true) || $deactivatedAt !== null;
+        $completed = $status === 'completed';
+        $isFreeTrial = (int)($purchase['attributes']['amount_in_cents'] ?? $purchase['attributes']['amount'] ?? 0) === 0;
+        $expiresAt = $purchase['attributes']['expires_at'] ?? null;
+
         return new self(
-            id: (int)self::getEnrollmentId($offerId, $contactId),
+            id: self::getEnrollmentId($offerId, $contactId),
             user_email: $userEmail,
             user_name: $userName,
             user_id: $contactId,
             course_name: $courseName,
-            course_id: $courseId, // This is the offer_id
+            course_id: $courseId, // This is the product_id
             percentage_completed: 0.0, // Kajabi doesn't track completion percentage the same way
-            expired: $status === 'deactivated',
-            is_free_trial: false, //Concept of free trial does not exist in Kajabi
-            completed: false, // Kajabi purchases don't have a completed state
+            expired: $expired,
+            is_free_trial: $isFreeTrial,
+            completed: $completed,
             started_at: isset($purchase['attributes']['effective_start_at'])
                 ? Carbon::parse($purchase['attributes']['effective_start_at'])
                 : (isset($purchase['attributes']['created_at']) ? Carbon::parse($purchase['attributes']['created_at']) : null),
-            activated_at: isset($purchase['attributes']['effective_start_at'])
-                ? Carbon::parse($purchase['attributes']['effective_start_at'])
+            activated_at: isset($purchase['attributes']['activated_at'])
+                ? Carbon::parse($purchase['attributes']['activated_at'])
                 : (isset($purchase['attributes']['created_at']) ? Carbon::parse($purchase['attributes']['created_at']) : null),
             completed_at: null, // Kajabi doesn't track completion
             updated_at: isset($purchase['attributes']['updated_at'])
                 ? Carbon::parse($purchase['attributes']['updated_at'])
                 : Carbon::now(),
-            expiry_date: $deactivatedAt
-                ? Carbon::parse($deactivatedAt)
-                : null,
+            expiry_date: $expiresAt
+                ? Carbon::parse($expiresAt)
+                : ($deactivatedAt ? Carbon::parse($deactivatedAt) : null),
             credential_id: null, // Kajabi handles credentials differently
             certificate_url: null,
             certificate_expiry_date: null,

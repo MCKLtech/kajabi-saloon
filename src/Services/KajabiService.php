@@ -30,7 +30,7 @@ final class KajabiService implements Kajabi, LMSServiceInterface
     public OfferService $offers;
     public SiteService $sites;
     public WebhookService $webhooks;
-    public CustomProfileFieldDefinitionService $custom_profile_field_definitions;
+    public CustomProfileFieldDefinitionService $customProfileFieldDefinitions;
 
     // Compatibility stub services (Kajabi doesn't support these features)
     public BundleService $bundles;
@@ -67,7 +67,7 @@ final class KajabiService implements Kajabi, LMSServiceInterface
         $this->offers = new OfferService($this);
         $this->sites = new SiteService($this);
         $this->webhooks = new WebhookService($this);
-        $this->custom_profile_field_definitions = new CustomProfileFieldDefinitionService($this);
+        $this->customProfileFieldDefinitions = new CustomProfileFieldDefinitionService($this);
 
         // Compatibility stub services (Thinkific features not available in Kajabi)
         $this->bundles = new BundleService($this);

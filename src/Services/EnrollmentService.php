@@ -14,6 +14,8 @@ use WooNinja\KajabiSaloon\Requests\Purchases\GetPurchases;
 use WooNinja\KajabiSaloon\Requests\Contacts\GetContactOffers;
 use WooNinja\KajabiSaloon\Requests\Contacts\GetContactsWithOffer;
 use WooNinja\KajabiSaloon\DataTransferObjects\Enrollments\Enrollment;
+use WooNinja\KajabiSaloon\DataTransferObjects\Enrollments\CreateEnrollment;
+use WooNinja\KajabiSaloon\DataTransferObjects\Enrollments\DeleteEnrollment;
 use WooNinja\LMSContracts\Contracts\Services\EnrollmentServiceInterface;
 use WooNinja\LMSContracts\Contracts\DTOs\Enrollments\EnrollmentInterface;
 use WooNinja\LMSContracts\Contracts\DTOs\Enrollments\ReadEnrollmentInterface;
@@ -157,6 +159,76 @@ class EnrollmentService extends Resource implements EnrollmentServiceInterface
             $contact->email,
             $contact->first_name . ' ' . $contact->last_name
         );
+    }
+
+    /**
+     * Enroll a user in a course (grants the offer to the contact)
+     *
+     * Thinkific-compatible convenience wrapper around create().
+     * - user_id_or_email: Contact ID (int) or Contact email (string)
+     * - course_id: Offer ID (course_id maps to offer_id in Kajabi)
+     * - offer_id: Optional explicit Offer ID override (defaults to course_id)
+     *
+     * @param int|string $user_id_or_email
+     * @param int $course_id
+     * @param int|null $offer_id
+     * @return EnrollmentInterface
+     * @throws FatalRequestException
+     * @throws RequestException|\JsonException
+     */
+    public function enroll(int|string $user_id_or_email, int $course_id, ?int $offer_id = null): EnrollmentInterface
+    {
+        $contactId = $this->resolveContactId($user_id_or_email);
+        $offerId = $offer_id ?? $course_id;
+
+        return $this->create(new CreateEnrollment(
+            user_id: $contactId,
+            course_id: $offerId
+        ));
+    }
+
+    /**
+     * Unenroll a user from a course (revokes the offer from the contact)
+     *
+     * Thinkific-compatible convenience wrapper around expire().
+     *
+     * @param int|string $user_id_or_email
+     * @param int $course_id
+     * @return Response
+     * @throws FatalRequestException
+     * @throws RequestException
+     */
+    public function unenroll(int|string $user_id_or_email, int $course_id): Response
+    {
+        $contactId = $this->resolveContactId($user_id_or_email);
+
+        return $this->expire(new DeleteEnrollment(
+            enrollment_id: 0,
+            user_id: $contactId,
+            course_id: $course_id
+        ));
+    }
+
+    /**
+     * Resolve a Contact ID from a numeric ID or an email address
+     *
+     * @param int|string $user_id_or_email
+     * @return int
+     */
+    private function resolveContactId(int|string $user_id_or_email): int
+    {
+        if (is_numeric($user_id_or_email)) {
+            return (int)$user_id_or_email;
+        }
+
+        $userService = new UserService($this->kajabi);
+        $contact = $userService->findByEmail((string)$user_id_or_email);
+
+        if ($contact === null) {
+            throw new \InvalidArgumentException("Contact not found for email: {$user_id_or_email}");
+        }
+
+        return $contact->id;
     }
 
     /**

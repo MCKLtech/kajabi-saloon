@@ -11,7 +11,7 @@ final class Course implements CourseInterface
         public string      $name,
         public string      $slug,
         public string|null $subtitle,
-        public int         $product_id,
+        public ?int        $product_id,
         public ?string     $description,
         public ?string     $course_card_text,
         public ?string     $intro_video_youtube,
@@ -111,12 +111,17 @@ final class Course implements CourseInterface
      */
     public static function fromKajabiCourse(array $course): self
     {
-        // Extract product_id from relationships
-        $productId = 0;
-        if (isset($course['relationships']['products']['data'])) {
-            $products = $course['relationships']['products']['data'];
-            if (!empty($products) && is_array($products)) {
-                $productId = (int) $products[0]['id']; // Take first product
+        // Extract product_id from relationships (Kajabi uses singular 'product' on
+        // course content responses and plural 'products' on offer/product responses)
+        $productId = null;
+        $productData = $course['relationships']['product']['data'] ?? $course['relationships']['products']['data'] ?? null;
+        if (!empty($productData)) {
+            if (isset($productData['id'])) {
+                // Singular form: { "data": { "id": "303", "type": "products" } }
+                $productId = (int)$productData['id'];
+            } elseif (is_array($productData)) {
+                // Plural form: { "data": [ { "id": "303", "type": "products" }, ... ] }
+                $productId = (int)$productData[0]['id'];
             }
         }
         

@@ -3,6 +3,7 @@
 namespace Tests\Unit\DTOs;
 
 use PHPUnit\Framework\TestCase;
+use Carbon\Carbon;
 use WooNinja\KajabiSaloon\DataTransferObjects\Users\User;
 use WooNinja\LMSContracts\Contracts\DTOs\Users\UserInterface;
 use Tests\Fixtures\KajabiApiResponses;
@@ -112,8 +113,8 @@ class UserTest extends TestCase
         $contactData = KajabiApiResponses::contact();
         $user = User::fromKajabiContact($contactData);
 
-        $this->assertEquals('2024-01-15T10:30:00Z', $user->created_at);
-        $this->assertEquals('2024-01-16T14:20:00Z', $user->updated_at);
+        $this->assertEquals(Carbon::parse('2024-01-15T10:30:00Z'), $user->created_at);
+        $this->assertEquals(Carbon::parse('2024-01-16T14:20:00Z'), $user->updated_at);
     }
 
     public function test_password_is_always_null_from_api(): void

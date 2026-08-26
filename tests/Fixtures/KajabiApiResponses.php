@@ -252,7 +252,7 @@ class KajabiApiResponses
         ];
     }
 
-    public static function paginatedResponse(array $items, int $page = 1, int $perPage = 25, int $total = null): array
+    public static function paginatedResponse(array $items, int $page = 1, int $perPage = 25, ?int $total = null): array
     {
         $total = $total ?? count($items);
         $totalPages = (int) ceil($total / $perPage);

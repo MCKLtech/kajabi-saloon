@@ -23,7 +23,9 @@ class EnrollmentTest extends TestCase
         $purchaseData = KajabiApiResponses::purchase();
         $enrollment = Enrollment::fromKajabiPurchase($purchaseData);
 
-        $this->assertEquals(789, $enrollment->id);
+        // Enrollment ID is the concatenated string offer_id + contact_id
+        // (string to avoid integer overflow on large Kajabi IDs)
+        $this->assertEquals('101456', $enrollment->id);
         $this->assertEquals('john.doe@example.com', $enrollment->user_email);
         $this->assertEquals('John Doe', $enrollment->user_name);
         $this->assertEquals('Introduction to Marketing', $enrollment->course_name);
@@ -121,7 +123,7 @@ class EnrollmentTest extends TestCase
 
         // Should fallback to created_at
         $this->assertInstanceOf(Carbon::class, $enrollment->started_at);
-        $this->assertEquals('2024-01-15T10:30:00Z', $enrollment->started_at->toIso8601String());
+        $this->assertEquals(Carbon::parse('2024-01-15T10:30:00Z'), $enrollment->started_at);
     }
 
     public function test_activated_at_fallback_to_created_at(): void

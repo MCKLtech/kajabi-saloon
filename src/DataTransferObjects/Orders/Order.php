@@ -26,6 +26,7 @@ class Order implements OrderInterface
         // Additional Kajabi-specific fields
         public ?string $updated_at = null,
         public ?string $currency = null,
+        public ?float  $total = null,
     )
     {
     }
@@ -43,7 +44,7 @@ class Order implements OrderInterface
      */
     public static function fromKajabiOrder(array $order): self
     {
-        $totalAmount = (float) ($order['attributes']['total_amount'] ?? 0);
+        $totalAmount = (float) ($order['attributes']['total_amount'] ?? $order['attributes']['total'] ?? 0);
         
         // Extract user_id from relationships
         $userId = 0;
@@ -94,6 +95,7 @@ class Order implements OrderInterface
             product_id: $productId,
             amount_dollars: $totalAmount,
             amount_cents: (int) ($totalAmount * 100),
+            total: $totalAmount,
             subscription: $isSubscription,
             coupon_code: $order['attributes']['coupon_code'] ?? null,
             coupon_id: isset($order['attributes']['coupon_id']) ? (int) $order['attributes']['coupon_id'] : null,
