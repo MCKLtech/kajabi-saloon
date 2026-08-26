@@ -36,13 +36,12 @@ class GetPurchases extends Request implements Paginatable
                 case 'user_id':
                     $query['filter[customer_id]'] = $value;
                     break;
-                case 'query[course_id]':
-                case 'course_id':
-                    $query['filter[product_id]'] = $value;
-                    break;
                 // Unsupported by the Kajabi /v1/purchases endpoint — silently dropped.
                 // (query[email] is resolved to filter[customer_id] by
-                // EnrollmentService::enrollments before this request is built.)
+                // EnrollmentService::enrollments before this request is built;
+                // course_id has no supported filter on /v1/purchases.)
+                case 'query[course_id]':
+                case 'course_id':
                 case 'query[email]':
                 case 'email':
                 case 'created_at_gte':
