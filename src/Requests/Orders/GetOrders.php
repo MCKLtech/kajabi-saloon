@@ -40,11 +40,9 @@ class GetOrders extends Request implements Paginatable
                 case 'user_id':
                     $query['filter[customer_id]'] = $value;
                     break;
+                // Date-range filters are not supported by GET /v1/orders — silently dropped
                 case 'created_at_gte':
-                    $query['filter[created_at_gte]'] = $value;
-                    break;
                 case 'created_at_lte':
-                    $query['filter[created_at_lte]'] = $value;
                     break;
                 default:
                     // Pass through other filters as-is

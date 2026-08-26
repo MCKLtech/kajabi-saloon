@@ -11,6 +11,7 @@ use Saloon\Exceptions\Request\FatalRequestException;
 use WooNinja\KajabiSaloon\Requests\Offers\GrantOffer;
 use WooNinja\KajabiSaloon\Requests\Offers\RevokeOffer;
 use WooNinja\KajabiSaloon\Requests\Purchases\GetPurchases;
+use WooNinja\KajabiSaloon\Requests\Customers\GetCustomers;
 use WooNinja\KajabiSaloon\Requests\Contacts\GetContactOffers;
 use WooNinja\KajabiSaloon\Requests\Contacts\GetContactsWithOffer;
 use WooNinja\KajabiSaloon\DataTransferObjects\Enrollments\Enrollment;
@@ -103,8 +104,43 @@ class EnrollmentService extends Resource implements EnrollmentServiceInterface
      */
     public function enrollments(array $filters = []): Paginator
     {
+        // Resolve Thinkific-style email filters to a Kajabi customer_id filter.
+        // GET /v1/purchases has no customer_email filter; the supported path is
+        // to find the customer by email, then filter purchases by customer_id.
+        if (isset($filters['query[email]']) || isset($filters['email'])) {
+            $email = $filters['query[email]'] ?? $filters['email'];
+            unset($filters['query[email]'], $filters['email']);
+
+            $customerId = $this->resolveCustomerIdByEmail($email);
+
+            if ($customerId === null) {
+                throw new \InvalidArgumentException("No Kajabi customer found for email: {$email}");
+            }
+
+            $filters['user_id'] = $customerId;
+        }
+
         return $this->connector
             ->paginate(new GetPurchases($filters, $this->getDefaultSiteId()));
+    }
+
+    /**
+     * Resolve a customer ID from an email address using GET /v1/customers?filter[search]=
+     *
+     * @param string $email
+     * @return int|null
+     */
+    private function resolveCustomerIdByEmail(string $email): ?int
+    {
+        $customers = $this->connector->paginate(
+            new GetCustomers(['search' => $email, 'limit' => 1], $this->getDefaultSiteId())
+        );
+
+        foreach ($customers->items() as $customer) {
+            return $customer->id;
+        }
+
+        return null;
     }
 
     /**
