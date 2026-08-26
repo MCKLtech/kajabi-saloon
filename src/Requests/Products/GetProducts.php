@@ -38,7 +38,8 @@ class GetProducts extends Request implements Paginatable
                     $query['filter[site_id]'] = $value;
                     break;
                 case 'name_cont':
-                    $query['filter[name_cont]'] = $value;
+                    // Kajabi products filter on title (not name)
+                    $query['filter[title_cont]'] = $value;
                     break;
                 case 'description_cont':
                     $query['filter[description_cont]'] = $value;
