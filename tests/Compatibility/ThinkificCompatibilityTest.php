@@ -142,6 +142,17 @@ class ThinkificCompatibilityTest extends TestCase
         $this->assertIsObject($this->service->customProfileFieldDefinitions);
     }
 
+    public function test_custom_profile_field_definitions_backward_compatible_alias(): void
+    {
+        // Pre-2.0.0 name must still resolve (Thinkific B2B Dashboard accesses it)
+        $this->assertObjectHasProperty('custom_profile_field_definitions', $this->service);
+        $this->assertIsObject($this->service->custom_profile_field_definitions);
+        $this->assertSame(
+            $this->service->customProfileFieldDefinitions,
+            $this->service->custom_profile_field_definitions
+        );
+    }
+
     public function test_has_groups_service_stub(): void
     {
         $this->assertObjectHasProperty('groups', $this->service);

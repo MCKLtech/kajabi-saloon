@@ -32,6 +32,15 @@ final class KajabiService implements Kajabi, LMSServiceInterface
     public WebhookService $webhooks;
     public CustomProfileFieldDefinitionService $customProfileFieldDefinitions;
 
+    /**
+     * Backward-compatible alias for $customProfileFieldDefinitions
+     * (pre-2.0.0 name; consumers like the Thinkific B2B Dashboard access
+     * this snake_case name, so it must not fatal on 2.x).
+     *
+     * @deprecated Use $customProfileFieldDefinitions instead.
+     */
+    public CustomProfileFieldDefinitionService $custom_profile_field_definitions;
+
     // Compatibility stub services (Kajabi doesn't support these features)
     public BundleService $bundles;
     public ChapterService $chapters;
@@ -68,6 +77,7 @@ final class KajabiService implements Kajabi, LMSServiceInterface
         $this->sites = new SiteService($this);
         $this->webhooks = new WebhookService($this);
         $this->customProfileFieldDefinitions = new CustomProfileFieldDefinitionService($this);
+        $this->custom_profile_field_definitions = $this->customProfileFieldDefinitions;
 
         // Compatibility stub services (Thinkific features not available in Kajabi)
         $this->bundles = new BundleService($this);
