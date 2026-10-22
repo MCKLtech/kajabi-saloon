@@ -350,7 +350,7 @@ $enrollment = $kajabi->enrollments->get(
 foreach ($enrollments->items() as $enrollment) {
     echo "User: {$enrollment->getUserEmail()}" . PHP_EOL;
     echo "Course: {$enrollment->getCourseName()}" . PHP_EOL;
-    echo "Progress: {$enrollment->getPercentageCompleted()}%" . PHP_EOL;
+    echo "Progress: " . round($enrollment->percentage_completed * 100) . "%" . PHP_EOL;
     echo "Completed: " . ($enrollment->isCompleted() ? 'Yes' : 'No') . PHP_EOL;
     echo "Started: {$enrollment->getStartedAt()->format('Y-m-d')}" . PHP_EOL;
 }
@@ -553,7 +553,7 @@ try {
     $enrollments = $kajabi->enrollments->enrollmentsForUserInCourse($user->id, $offerId);
     foreach ($enrollments->items() as $enrollment) {
         echo "📚 Enrollment: {$enrollment->getUserEmail()}\n";
-        echo "🎯 Progress: {$enrollment->getPercentageCompleted()}%\n";
+        echo "🎯 Progress: " . round($enrollment->percentage_completed * 100) . "%\n";
     }
 
 } catch (\Exception $e) {
