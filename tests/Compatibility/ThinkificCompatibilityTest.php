@@ -396,6 +396,12 @@ class ThinkificCompatibilityTest extends TestCase
         $this->assertIsObject($this->service->webhooks);
     }
 
+    public function test_has_course_progress_service(): void
+    {
+        $this->assertObjectHasProperty('courseProgress', $this->service);
+        $this->assertInstanceOf(\WooNinja\KajabiSaloon\Services\CourseProgressService::class, $this->service->courseProgress);
+    }
+
     // ==================== Interface Method Accessor Tests ====================
 
     public function test_users_method_returns_user_service_interface(): void

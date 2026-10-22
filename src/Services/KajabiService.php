@@ -30,6 +30,7 @@ final class KajabiService implements Kajabi, LMSServiceInterface
     public OfferService $offers;
     public SiteService $sites;
     public WebhookService $webhooks;
+    public CourseProgressService $courseProgress;
     public CustomProfileFieldDefinitionService $customProfileFieldDefinitions;
 
     /**
@@ -76,6 +77,7 @@ final class KajabiService implements Kajabi, LMSServiceInterface
         $this->offers = new OfferService($this);
         $this->sites = new SiteService($this);
         $this->webhooks = new WebhookService($this);
+        $this->courseProgress = new CourseProgressService($this);
         $this->customProfileFieldDefinitions = new CustomProfileFieldDefinitionService($this);
         $this->custom_profile_field_definitions = $this->customProfileFieldDefinitions;
 
@@ -182,14 +184,16 @@ final class KajabiService implements Kajabi, LMSServiceInterface
      * Set the access token to bypass authentication
      *
      * @param string $token
+     * @param int|null $expiresIn Seconds until expiry (from the token response); when set,
+     *                            a new token is fetched shortly before it runs out
      * @return void
      */
-    public function setAccessToken(string $token): void
+    public function setAccessToken(string $token, ?int $expiresIn = null): void
     {
         $authenticator = $this->authenticator();
         
         if ($authenticator instanceof KajabiAuthenticator) {
-            $authenticator->setAccessToken($token);
+            $authenticator->setAccessToken($token, $expiresIn);
         }
     }
 

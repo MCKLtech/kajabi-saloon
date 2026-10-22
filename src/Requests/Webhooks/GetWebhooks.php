@@ -6,6 +6,7 @@ use Saloon\Enums\Method;
 use Saloon\Http\Request;
 use Saloon\PaginationPlugin\Contracts\Paginatable;
 use WooNinja\KajabiSaloon\DataTransferObjects\Webhooks\Webhook;
+use WooNinja\KajabiSaloon\Enums\WebhookEvent;
 
 class GetWebhooks extends Request implements Paginatable
 {
@@ -22,6 +23,7 @@ class GetWebhooks extends Request implements Paginatable
             switch ($key) {
                 case 'limit': $query['page[size]'] = $value; break;
                 case 'page': $query['page[number]'] = $value; break;
+                case 'event': $query['filter[event_eq]'] = $value instanceof WebhookEvent ? $value->value : $value; break;
                 // Skip pagination control parameters (handled by paginator, not API)
                 case 'start_page':
                 case 'max_pages':

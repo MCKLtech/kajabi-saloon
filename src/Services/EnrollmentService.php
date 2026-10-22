@@ -7,6 +7,8 @@ use Saloon\Http\Response;
 use Saloon\PaginationPlugin\Paginator;
 use Saloon\Exceptions\Request\RequestException;
 use WooNinja\KajabiSaloon\Requests\Offers\GetOffer;
+use WooNinja\KajabiSaloon\DataTransferObjects\CourseProgress\CourseProgress;
+use WooNinja\KajabiSaloon\DataTransferObjects\Users\User;
 use Saloon\Exceptions\Request\FatalRequestException;
 use WooNinja\KajabiSaloon\Requests\Offers\GrantOffer;
 use WooNinja\KajabiSaloon\Requests\Offers\RevokeOffer;
@@ -18,6 +20,7 @@ use WooNinja\KajabiSaloon\DataTransferObjects\Enrollments\Enrollment;
 use WooNinja\KajabiSaloon\DataTransferObjects\Enrollments\CreateEnrollment;
 use WooNinja\KajabiSaloon\DataTransferObjects\Enrollments\DeleteEnrollment;
 use WooNinja\LMSContracts\Contracts\Services\EnrollmentServiceInterface;
+use WooNinja\LMSContracts\Contracts\DTOs\Users\UserInterface;
 use WooNinja\LMSContracts\Contracts\DTOs\Enrollments\EnrollmentInterface;
 use WooNinja\LMSContracts\Contracts\DTOs\Enrollments\ReadEnrollmentInterface;
 use WooNinja\LMSContracts\Contracts\DTOs\Enrollments\UpdateEnrollmentInterface;
@@ -430,5 +433,79 @@ class EnrollmentService extends Resource implements EnrollmentServiceInterface
         }
 
         return false;
+    }
+
+    /**
+     * Course progress rows for a Contact in a Course (Offer), one per course product in the offer
+     *
+     * Resolves Contact -> Customer and Offer -> Products, then reads
+     * GET /v1/course_progress per product. Products the endpoint doesn't
+     * support (non-course products, cohorts) return 404 and are skipped.
+     * Costs 2 + one request per product in the offer.
+     *
+     * @param int|string $user_id_or_email Contact ID or email
+     * @param int $course_id Offer ID
+     * @return CourseProgress[]
+     * @throws FatalRequestException
+     * @throws RequestException
+     */
+    public function progress(int|string $user_id_or_email, int $course_id): array
+    {
+        $contact = $this->resolveContact($user_id_or_email);
+
+        // No customer record yet means the contact has never been granted anything
+        if (!$contact instanceof User || $contact->customer_id === null) {
+            return [];
+        }
+
+        $offer = $this->connector->send(new GetOffer($course_id))->dtoOrFail();
+
+        $courseProgress = new CourseProgressService($this->kajabi);
+        $rows = [];
+
+        foreach ($offer->product_ids as $productId) {
+            try {
+                $row = $courseProgress->forCustomer($productId, $contact->customer_id);
+            } catch (RequestException $e) {
+                if ($e->getResponse()->status() === 404) {
+                    continue;
+                }
+
+                throw $e;
+            }
+
+            if ($row !== null) {
+                $rows[] = $row;
+            }
+        }
+
+        return $rows;
+    }
+
+    /**
+     * Fill an enrollment's percentage_completed, completed, started_at and completed_at
+     * from course progress (opt-in: costs extra requests, see progress())
+     *
+     * @throws FatalRequestException
+     * @throws RequestException
+     */
+    public function withProgress(EnrollmentInterface $enrollment): EnrollmentInterface
+    {
+        if (!$enrollment instanceof Enrollment) {
+            return $enrollment;
+        }
+
+        return $enrollment->withCourseProgress(
+            $this->progress($enrollment->user_id, $enrollment->course_id)
+        );
+    }
+
+    private function resolveContact(int|string $user_id_or_email): ?UserInterface
+    {
+        $userService = new UserService($this->kajabi);
+
+        return is_numeric($user_id_or_email)
+            ? $userService->get((int)$user_id_or_email)
+            : $userService->findByEmail((string)$user_id_or_email);
     }
 }

@@ -217,8 +217,17 @@ class KajabiConnector extends Connector implements HasPagination
                         if (isset($parsedUrl['query'])) {
                             parse_str($parsedUrl['query'], $queryParams);
 
-                            // Add all query params from next URL to request
+                            // Add all query params from next URL to request. parse_str nests
+                            // "page[after]" as ['page' => ['after' => ...]]; flatten back to
+                            // bracket keys so they replace (not duplicate) the existing ones.
                             foreach ($queryParams as $key => $value) {
+                                if (is_array($value)) {
+                                    foreach ($value as $subKey => $subValue) {
+                                        $request->query()->add("{$key}[{$subKey}]", $subValue);
+                                    }
+                                    continue;
+                                }
+
                                 $request->query()->add($key, $value);
                             }
                         }

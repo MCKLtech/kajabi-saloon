@@ -448,6 +448,71 @@ $webhooks = $kajabi->webhooks->webhooks();
 $webhook = $kajabi->webhooks->get(456);
 ```
 
+### Webhooks & Member Activity
+
+```php
+use WooNinja\KajabiSaloon\Enums\WebhookEvent;
+
+// One hook per event per URL (https only). Course events can be scoped to one course.
+$hook = $kajabi->webhooks->create(WebhookEvent::LessonCompleted, 'https://example.com/hooks/k7f3', $courseId);
+$hook = $kajabi->webhooks->replace($hook, 'https://example.com/hooks/new-path'); // create new, then delete old
+$kajabi->webhooks->delete($hook->id);
+
+// Sample payloads, in the same shape as a live delivery
+$payload = $kajabi->webhooks->sample(WebhookEvent::CourseCompleted);
+```
+
+Parse inbound deliveries into typed events (framework agnostic):
+
+```php
+use WooNinja\KajabiSaloon\Webhooks\WebhookParser;
+use WooNinja\KajabiSaloon\Webhooks\Events\{LessonCompleted, CourseStarted, CourseCompleted, AssessmentCompleted, MemberSignedIn};
+
+$event = WebhookParser::parse($request->getContent()); // or the decoded array
+
+// Delivery is at least once: dedupe retries on the delivery id, and the same
+// activity sent under different ids (e.g. overlapping hooks) on the content key.
+if ($store->seen($event->deliveryId()) || $store->seen($event->contentKey())) {
+    return response('', 200);
+}
+
+match (true) {
+    $event instanceof LessonCompleted => markLesson($event->contactId(), $event->courseId(), $event->lessonId(), $event->occurredAt()),
+    $event instanceof CourseCompleted => markCourseComplete($event->contactId(), $event->courseId(), $event->occurredAt()),
+    $event instanceof CourseStarted => markCourseStarted($event->contactId(), $event->courseId(), $event->occurredAt()),
+    $event instanceof AssessmentCompleted => recordResult($event->contactId(), $event->assessment, $event->result), // passed/grade null when ungraded
+    $event instanceof MemberSignedIn => touchLastSeen($event->customerId(), $event->occurredAt()), // best-effort signal
+    default => null, // GenericWebhookEvent for purchase, tag_added, etc.
+};
+```
+
+Return a 2xx quickly and process in the background. Only a 429 response is retried, so run the course progress sync below to catch anything missed. Deliveries are unsigned, so use a hard-to-guess URL.
+
+### Course Progress
+
+```php
+// Every member's progress in a course (course id = product id), per lesson
+foreach ($kajabi->courseProgress->forCourse($courseId)->items() as $row) {
+    echo "{$row->customer_id}: {$row->percent_complete}% ({$row->completed_lessons}/{$row->total_lessons})";
+}
+
+$row = $kajabi->courseProgress->forCustomer($courseId, $customerId); // null if no progress record
+
+// Recommended sync: frequent incremental runs plus a nightly full pass
+$sync = $kajabi->courseProgress->sync(); // 5 minute margin by default
+$result = $sync->incremental($courseId, $lastSyncStartedAt, fn($row) => $repo->upsert($row));
+$lastSyncStartedAt = $result->started_at; // persist only after the run succeeds
+
+$result = $sync->full($courseId, fn($row) => $repo->upsert($row));
+$repo->delete($result->missingFrom($repo->idsForCourse($courseId)));
+
+// Real progress on an enrollment (opt-in; extra requests per call)
+$enrollment = $kajabi->enrollments->withProgress($enrollment);
+echo $enrollment->percentage_completed; // 0.0 - 1.0
+```
+
+A 423 response throws `WooNinja\KajabiSaloon\Exceptions\FeatureNotEnabledException` (a `RequestException`).
+
 ## Complete Workflow Examples
 
 ### Create User and Enroll in Course
@@ -587,7 +652,8 @@ This library provides a **drop-in replacement** for Thinkific by mapping Kajabi 
 | Customers | `/customers` | Auto-created with offers | `get()`, `customers()` |
 | Offers | `/offers` | Grant access to products | `get()`, `offers()` |
 | Sites | `/sites` | Site information | `get()`, `sites()` |
-| Webhooks | `/hooks` | Webhook management | `get()`, `webhooks()` |
+| Webhooks | `/hooks` | Webhook management | `get()`, `webhooks()`, `create()`, `delete()`, `replace()`, `sample()`, `parse()` |
+| Course Progress | `/course_progress` | Per-member course progress | `forCourse()`, `forCustomer()`, `updatedSince()`, `sync()` |
 
 ## Data Transformation
 
@@ -604,7 +670,7 @@ The library automatically transforms Kajabi's JSON:API format to match Thinkific
 - **Customer relationship** → `user_id` extracted
 - **Product relationship** → `course_id` extracted
 - **Status mapping** → `active`, `completed`, `expired`, `cancelled`
-- **Default progress** → `percentage_completed` = 0.0
+- **Default progress** → `percentage_completed` = 0.0 (use `$kajabi->enrollments->withProgress()` for real progress)
 
 ### Course Transformation
 - **Product relationship** → `product_id` extracted
@@ -675,7 +741,7 @@ vendor/bin/phpunit --coverage-html coverage
 
 **Test Coverage:**
 - ✅ All lms-contracts interfaces implemented
-- ✅ All 20 services present and functional
+- ✅ All 21 services present and functional
 - ✅ Property access patterns match Thinkific
 - ✅ DTO transformations (Kajabi → Thinkific format)
 - ✅ Filter translation
@@ -685,9 +751,9 @@ vendor/bin/phpunit --coverage-html coverage
 
 ### API Version & Compliance
 
-This library implements **Kajabi API V1** (OpenAPI 3.1.1 specification).
+This library implements **Kajabi API V1** (OpenAPI 3.1.1 specification, spec v1.1.0 — 60 paths / 77 operations).
 
-**Coverage**: 27/49 endpoints (55.1%)
+**Coverage**: 28 of 60 spec paths (46.7%), 35 of 77 operations. The per-category counts below reflect the originally targeted endpoint subset; see [API_COMPLIANCE.md](API_COMPLIANCE.md) for the authoritative, spec-anchored coverage matrix.
 - ✅ **Contacts (Users)**: 6/7 endpoints - Create, read, update, delete, list, manage offers
 - ✅ **Courses**: 2/2 endpoints - Full course access
 - ✅ **Customers**: 4/5 endpoints - Customer management
@@ -696,7 +762,8 @@ This library implements **Kajabi API V1** (OpenAPI 3.1.1 specification).
 - ✅ **Orders**: 2/2 endpoints - Order history
 - ✅ **Products**: 2/2 endpoints - Product catalog
 - ✅ **Sites**: 2/2 endpoints - Site information
-- ✅ **Webhooks**: 2/2 endpoints - Webhook management (stubs)
+- ✅ **Webhooks**: 10/10 spec operations - List, view, create, delete, samples, plus typed parsing of inbound deliveries
+- ✅ **Course Progress**: `GET /v1/course_progress` - per-member progress with cursor paging and a sync helper
 - ✅ **Authentication**: 1/2 endpoints - OAuth2 token (revoke pending)
 
 **Not Yet Implemented**: Blog posts, contact notes/tags, custom fields, forms, landing pages, order items, transactions, website pages
@@ -742,4 +809,4 @@ For issues, questions, or contributions:
 
 ## Documentation
 
-- **[openapi.yaml](openapi.yaml)** - Official Kajabi API V1 OpenAPI 3.1.1 specification
+- **[openapi.yaml](openapi.yaml)** - Official Kajabi API V1 OpenAPI 3.1.1 specification (spec v1.1.0, 60 paths / 77 operations; pinned SHA-256 and refresh procedure in [API_COMPLIANCE.md](API_COMPLIANCE.md#keeping-the-spec-in-sync))

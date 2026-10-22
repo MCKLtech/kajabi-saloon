@@ -20,6 +20,9 @@ final class Customer
         public ?string $bounced_at,
         public string  $created_at,
         public string  $updated_at,
+        public ?string $last_sign_in_at = null,
+        public ?int    $contact_id = null,
+        public ?int    $site_id = null,
     )
     {
     }
@@ -45,6 +48,16 @@ final class Customer
             bounced_at: $customer['attributes']['bounced_at'] ?? null,
             created_at: $customer['attributes']['created_at'] ?? '',
             updated_at: $customer['attributes']['updated_at'] ?? '',
+            last_sign_in_at: $customer['attributes']['last_sign_in_at'] ?? null,
+            contact_id: self::relationshipId($customer, 'contact'),
+            site_id: self::relationshipId($customer, 'site'),
         );
+    }
+
+    private static function relationshipId(array $resource, string $name): ?int
+    {
+        $id = $resource['relationships'][$name]['data']['id'] ?? null;
+
+        return $id !== null ? (int) $id : null;
     }
 }

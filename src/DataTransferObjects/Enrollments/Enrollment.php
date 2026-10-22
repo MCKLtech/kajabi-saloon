@@ -3,6 +3,7 @@
 namespace WooNinja\KajabiSaloon\DataTransferObjects\Enrollments;
 
 use Carbon\Carbon;
+use WooNinja\KajabiSaloon\DataTransferObjects\CourseProgress\CourseProgress;
 use WooNinja\KajabiSaloon\Services\UserService;
 use WooNinja\LMSContracts\Contracts\DTOs\Enrollments\EnrollmentInterface;
 use WooNinja\LMSContracts\Contracts\DTOs\Users\UserInterface;
@@ -84,6 +85,66 @@ final class Enrollment implements EnrollmentInterface
             status: 'active',
             created_at: Carbon::now()->toISOString(),
         );
+    }
+
+    /**
+     * Copy of this enrollment with real progress from course progress rows
+     *
+     * An offer can grant several courses, so the rows are aggregated by lesson count:
+     * - percentage_completed: completed lessons / total lessons, as a 0.0-1.0 fraction (Thinkific convention)
+     * - completed: every row is complete
+     * - started_at: earliest lesson completion (falls back to the existing value)
+     * - completed_at: latest lesson completion when completed, otherwise null
+     * - updated_at: latest row update (falls back to the existing value)
+     *
+     * With no rows (no progress record yet, or no course products) it's returned unchanged.
+     *
+     * @param CourseProgress[] $rows
+     */
+    public function withCourseProgress(array $rows): self
+    {
+        $enrollment = clone $this;
+
+        if ($rows === []) {
+            return $enrollment;
+        }
+
+        $completedLessons = 0;
+        $totalLessons = 0;
+        $startedAt = [];
+        $completedAt = [];
+        $updatedAt = [];
+
+        foreach ($rows as $row) {
+            $completedLessons += $row->completed_lessons;
+            $totalLessons += $row->total_lessons;
+
+            if ($started = $row->startedAt()) {
+                $startedAt[] = $started;
+            }
+            if ($completed = $row->completedAt()) {
+                $completedAt[] = $completed;
+            }
+            if ($row->updated_at) {
+                $updatedAt[] = $row->updated_at;
+            }
+        }
+
+        $allCompleted = array_reduce($rows, fn(bool $carry, CourseProgress $row) => $carry && $row->completed, true);
+
+        $enrollment->percentage_completed = $totalLessons > 0
+            ? round($completedLessons / $totalLessons, 4)
+            : ($allCompleted ? 1.0 : 0.0);
+        $enrollment->completed = $allCompleted;
+        $enrollment->started_at = $startedAt !== [] ? Carbon::instance(min($startedAt)) : $this->started_at;
+        $enrollment->completed_at = $allCompleted && $completedAt !== [] ? Carbon::instance(max($completedAt)) : null;
+        $enrollment->updated_at = $updatedAt !== [] ? Carbon::instance(max($updatedAt)) : $this->updated_at;
+
+        if ($allCompleted && $enrollment->status === 'active') {
+            $enrollment->status = 'completed';
+        }
+
+        return $enrollment;
     }
 
     public static function getEnrollmentId($offerId, $contactId): string

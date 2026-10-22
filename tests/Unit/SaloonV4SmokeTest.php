@@ -63,10 +63,12 @@ class SaloonV4SmokeTest extends TestCase
         $this->assertSame(['a@example.com', 'b@example.com', 'c@example.com'], $emails);
         $this->assertSame(3, $paginator->getTotalAPIResults());
 
-        // The final request must have carried page[number]=2 parsed from links.next
-        // (parse_str nests it as page[number] => ['number' => '2', 'size' => '2'])
+        // The final request must have carried page[number]=2 parsed from links.next,
+        // flattened back to a bracket key so it isn't sent twice alongside page[size]
         $lastQuery = $mockClient->getLastRequest()->query()->all();
-        $this->assertSame('2', $lastQuery['page']['number'] ?? null);
+        $this->assertSame('2', $lastQuery['page[number]'] ?? null);
+        $this->assertSame('2', $lastQuery['page[size]'] ?? null);
+        $this->assertArrayNotHasKey('page', $lastQuery);
     }
 
     public function test_oauth2_authenticator_fetches_token_and_applies_bearer_header(): void

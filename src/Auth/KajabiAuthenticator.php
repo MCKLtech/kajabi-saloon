@@ -10,7 +10,13 @@ use WooNinja\KajabiSaloon\Requests\Auth\GetToken;
 
 class KajabiAuthenticator implements Authenticator
 {
+    /**
+     * Refresh this many seconds before the token's expires_in runs out
+     */
+    public const EXPIRY_MARGIN_SECONDS = 60;
+
     private ?string $accessToken = null;
+    private ?int $expiresAt = null; // Unix time; null = no known expiry
     public $connector = null;
     private bool $isAuthenticating = false; // Prevent infinite loop
 
@@ -26,7 +32,7 @@ class KajabiAuthenticator implements Authenticator
             return;
         }
 
-        if (!$this->accessToken) {
+        if (!$this->accessToken || $this->isTokenExpired()) {
             $this->authenticate();
         }
 
@@ -52,6 +58,9 @@ class KajabiAuthenticator implements Authenticator
             if ($response->successful()) {
                 $data = $response->json();
                 $this->accessToken = $data['access_token'];
+                $this->expiresAt = isset($data['expires_in'])
+                    ? time() + (int)$data['expires_in'] - self::EXPIRY_MARGIN_SECONDS
+                    : null;
             } else {
                 throw new \Exception('Failed to authenticate: ' . $response->body());
             }
@@ -66,8 +75,17 @@ class KajabiAuthenticator implements Authenticator
         return $this->accessToken;
     }
 
-    public function setAccessToken(string $token): void
+    /**
+     * @param int|null $expiresIn Seconds until the token expires (null = treat as non-expiring)
+     */
+    public function setAccessToken(string $token, ?int $expiresIn = null): void
     {
         $this->accessToken = $token;
+        $this->expiresAt = $expiresIn !== null ? time() + $expiresIn - self::EXPIRY_MARGIN_SECONDS : null;
+    }
+
+    public function isTokenExpired(): bool
+    {
+        return $this->expiresAt !== null && time() >= $this->expiresAt;
     }
 }

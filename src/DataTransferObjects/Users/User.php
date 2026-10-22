@@ -36,6 +36,8 @@ final class User implements UserInterface
         public ?string $address_zip = null,
         public ?string $business_number = null,
         public ?Carbon $updated_at = null,
+        // Customer record for this contact (set once they have an offer or purchase)
+        public ?int    $customer_id = null,
     )
     {
     }
@@ -106,6 +108,9 @@ final class User implements UserInterface
             business_number: $contact['attributes']['business_number'] ?? null,
             updated_at: isset($contact['attributes']['updated_at'])
                 ? Carbon::parse($contact['attributes']['updated_at'])
+                : null,
+            customer_id: isset($contact['relationships']['customer']['data']['id'])
+                ? (int) $contact['relationships']['customer']['data']['id']
                 : null,
         );
     }
