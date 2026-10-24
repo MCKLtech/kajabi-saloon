@@ -8,7 +8,12 @@ use Saloon\Http\Response;
 use Saloon\PaginationPlugin\Contracts\Paginatable;
 use Throwable;
 use WooNinja\KajabiSaloon\DataTransferObjects\CourseProgress\CourseProgress;
+use WooNinja\KajabiSaloon\Exceptions\CourseProgressForbiddenException;
+use WooNinja\KajabiSaloon\Exceptions\CourseProgressNotFoundException;
 use WooNinja\KajabiSaloon\Exceptions\FeatureNotEnabledException;
+use WooNinja\KajabiSaloon\Requests\Concerns\JsonApiQuery;
+use WooNinja\KajabiSaloon\Requests\Concerns\SupportedFilters;
+use WooNinja\KajabiSaloon\Requests\Contracts\DeclaresSupportedFilters;
 
 /**
  * GET /v1/course_progress
@@ -17,8 +22,10 @@ use WooNinja\KajabiSaloon\Exceptions\FeatureNotEnabledException;
  * a 400, so Thinkific-style page/start_page filters are dropped. There is no
  * total count.
  */
-class GetCourseProgress extends Request implements Paginatable
+class GetCourseProgress extends Request implements Paginatable, DeclaresSupportedFilters
 {
+    use JsonApiQuery;
+
     public const MAX_PAGE_SIZE = 100;
 
     protected Method $method = Method::GET;
@@ -78,13 +85,32 @@ class GetCourseProgress extends Request implements Paginatable
         return $value instanceof \DateTimeInterface ? $value->format(\DateTimeInterface::ATOM) : $value;
     }
 
-    public function getRequestException(Response $response, ?Throwable $senderException): ?Throwable
+    /**
+     * The page[after] cursor in a links.next URL, or null on the last page
+     *
+     * Kajabi sends the URL with its brackets percent-encoded
+     * (page%5Bafter%5D=...); both forms are read.
+     */
+    public static function cursorFrom(?string $nextLink): ?string
     {
-        if ($response->status() === 423) {
-            return new FeatureNotEnabledException($response, 'course progress');
+        if ($nextLink === null || $nextLink === '') {
+            return null;
         }
 
-        return null;
+        parse_str((string) parse_url($nextLink, PHP_URL_QUERY), $query);
+        $after = $query['page']['after'] ?? null;
+
+        return $after !== null && $after !== '' ? (string) $after : null;
+    }
+
+    public function getRequestException(Response $response, ?Throwable $senderException): ?Throwable
+    {
+        return match ($response->status()) {
+            403 => new CourseProgressForbiddenException($response, $this->productId),
+            404 => new CourseProgressNotFoundException($response, $this->productId),
+            423 => new FeatureNotEnabledException($response, 'course progress'),
+            default => null,
+        };
     }
 
     public function createDtoFromResponse($response): array
@@ -93,5 +119,10 @@ class GetCourseProgress extends Request implements Paginatable
             fn(array $row) => CourseProgress::fromKajabiCourseProgress($row, $this->productId),
             $response->json('data', [])
         );
+    }
+
+    public static function supportedFilters(): array
+    {
+        return SupportedFilters::COURSE_PROGRESS;
     }
 }

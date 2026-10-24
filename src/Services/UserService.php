@@ -145,4 +145,48 @@ class UserService extends Resource implements UserServiceInterface
 
         return null;
     }
+
+    /**
+     * Customer ids for the given contact ids, as contact_id => customer_id
+     *
+     * Contact list rows always carry the customer relationship (null until
+     * the contact buys or is granted an offer), so this walks the listing
+     * with only that relationship and stops once every id is seen. Contacts
+     * that aren't customers yet, or aren't on the site, are left out.
+     *
+     * @param int[] $contactIds
+     * @return array<int, int>
+     */
+    public function customerIds(array $contactIds, array $filters = []): array
+    {
+        $wanted = array_fill_keys(array_map('intval', $contactIds), true);
+
+        if ($wanted === []) {
+            return [];
+        }
+
+        $map = [];
+        $contacts = $this->users([
+            'fields[contacts]' => 'customer',
+            'limit' => CustomerService::ID_MAP_PAGE_SIZE,
+        ] + $filters);
+
+        foreach ($contacts->items() as $contact) {
+            if (!isset($wanted[$contact->id])) {
+                continue;
+            }
+
+            if ($contact->customer_id !== null) {
+                $map[$contact->id] = $contact->customer_id;
+            }
+
+            unset($wanted[$contact->id]);
+
+            if ($wanted === []) {
+                break;
+            }
+        }
+
+        return $map;
+    }
 }

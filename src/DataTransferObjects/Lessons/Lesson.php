@@ -3,7 +3,12 @@
 namespace WooNinja\KajabiSaloon\DataTransferObjects\Lessons;
 
 /**
- * Lesson as sent in member activity webhook payloads (type "lessons")
+ * Lesson (type "lessons"), from member activity webhook payloads and from
+ * GET /v1/courses/{id}?include=lessons
+ *
+ * $position orders lessons within their module and starts at 0. $status is
+ * the processing state ("ready", "duplicating"); visibility is
+ * $publishing_option (published, draft, drip, locked).
  */
 final class Lesson
 {
@@ -33,5 +38,10 @@ final class Lesson
             module_id: $moduleId !== null ? (int) $moduleId : null,
             media_id: $mediaId !== null ? (int) $mediaId : null,
         );
+    }
+
+    public function isPublished(): bool
+    {
+        return $this->publishing_option === 'published';
     }
 }

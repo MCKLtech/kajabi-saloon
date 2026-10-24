@@ -105,7 +105,7 @@ final class Offer implements ProductInterface
 
         if ($description) {
             $description = trim(
-                preg_replace('/\s+/', ' ', strip_tags($description))
+                preg_replace('/\s+/', ' ', strip_tags((string) $description))
             );
         }
 
@@ -128,10 +128,10 @@ final class Offer implements ProductInterface
             has_certificate: false,
             keywords: null,
             seo_title: $name,
-            seo_description: strip_tags($description),
+            seo_description: strip_tags((string) $description),
             collection_ids: [],
             related_product_ids: [],
-            description: strip_tags($description),
+            description: strip_tags((string) $description),
             card_image_url: null,
             slug: $offer['attributes']['token'] ?? '',
 

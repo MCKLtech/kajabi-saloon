@@ -3,6 +3,7 @@
 namespace WooNinja\KajabiSaloon\Connectors;
 
 use Saloon\Http\Connector;
+use Saloon\Http\PendingRequest;
 use Saloon\Http\Request;
 use Saloon\PaginationPlugin\Contracts\HasPagination;
 use Saloon\PaginationPlugin\CursorPaginator;
@@ -14,15 +15,53 @@ use Saloon\RateLimitPlugin\Stores\MemoryStore;
 use Saloon\RateLimitPlugin\Traits\HasRateLimits;
 use Saloon\Traits\Plugins\AcceptsJson;
 use Saloon\Traits\Plugins\AlwaysThrowOnErrors;
+use WooNinja\KajabiSaloon\Exceptions\UnsupportedFilterException;
+use WooNinja\KajabiSaloon\Requests\Concerns\SupportedFilters;
+use WooNinja\KajabiSaloon\Requests\Contracts\DeclaresSupportedFilters;
 
 class KajabiConnector extends Connector implements HasPagination
 {
     use AcceptsJson;
     use AlwaysThrowOnErrors;
-    use HasRateLimits;
+    use HasRateLimits {
+        handleExceededLimit as private traitHandleExceededLimit;
+    }
+
+    /**
+     * Name of the shared client-side limit. Kajabi limits by client IP (at
+     * Cloudflare), not by token or site, so every connector on one server should
+     * share it - keep the default unless your sites send from different IPs.
+     */
+    public const DEFAULT_RATE_LIMIT_NAME = 'kajabi-api';
+
+    /**
+     * Kajabi's real limit, measured 2026-10-24 (not published by Kajabi): about
+     * 1000 requests per sliding 60 seconds per client IP, enforced by
+     * Cloudflare for every token and site. Going over returns 429 (text/plain
+     * "error code: 1015", Retry-After: 600) and blocks the IP - token exchange
+     * included - for 10 minutes.
+     */
+    public const KAJABI_IP_LIMIT_PER_MINUTE = 1000;
+
+    /**
+     * Seconds Kajabi blocks an IP after a 429
+     */
+    public const KAJABI_BLOCK_SECONDS = 600;
+
+    /**
+     * Client-side default. Deliberately a tenth of the IP limit: the default
+     * MemoryStore counts per PHP process, so this stays safe with several
+     * workers. With a shared store (setRateStore) across every process on the
+     * IP, up to ~900 is reasonable.
+     */
+    public const DEFAULT_RATE_LIMIT = 100;
 
     public bool|RateLimitStore $rateStore = false;
-    public int $rateLimit = 100; // Kajabi's default rate limit
+    public int $rateLimit = self::DEFAULT_RATE_LIMIT; // requests per minute, client side
+    public string $rateLimitName = self::DEFAULT_RATE_LIMIT_NAME;
+    public bool $sleepOnRateLimit = false;
+    public int $maxRateLimitSleepSeconds = 60;
+    public bool $strictFilters = false;
     public string $baseUrl = 'https://api.kajabi.com/v1';
 
     public function __construct()
@@ -71,17 +110,117 @@ class KajabiConnector extends Connector implements HasPagination
     }
 
     /**
+     * Refuse to send list requests with filters/parameters Kajabi ignores
+     *
+     * Kajabi answers an unsupported filter (filter[id], filter[contact_id], a
+     * typo...) with the UNFILTERED list and a 200, so code that relies on the
+     * filter silently processes everything. In strict mode such a request
+     * throws UnsupportedFilterException instead. Recommended in development
+     * and tests; off by default for backward compatibility.
+     */
+    public function setStrictFilters(bool $strict = true): void
+    {
+        $this->strictFilters = $strict;
+    }
+
+    /**
+     * @throws UnsupportedFilterException in strict filter mode
+     */
+    public function boot(PendingRequest $pendingRequest): void
+    {
+        $request = $pendingRequest->getRequest();
+
+        if (!$this->strictFilters || !$request instanceof DeclaresSupportedFilters) {
+            return;
+        }
+
+        $ignored = SupportedFilters::ignored($pendingRequest->query()->all(), $request::supportedFilters());
+
+        if ($ignored !== []) {
+            throw new UnsupportedFilterException($request::class, $ignored);
+        }
+    }
+
+    /**
+     * Name the client-side limit (its bucket in the rate limit store)
+     *
+     * Connectors with the same name and store share one allowance. Only give
+     * sites separate names when they really send from separate IPs.
+     */
+    public function setRateLimitName(string $name): void
+    {
+        $this->rateLimitName = $name;
+    }
+
+    /**
+     * Wait instead of throwing when the client-side limit is reached
+     *
+     * NOT RECOMMENDED. The default - throwing RateLimitReachedException - is
+     * standard practice: catch it and reschedule the work (e.g. release a
+     * queued job with a delay of secondsUntilAvailable()). Sleeping holds a
+     * worker and its memory while doing nothing, can outlast job and HTTP
+     * timeouts, and hides back-pressure from the caller. Only use it for
+     * one-off scripts or CLI commands where blocking is acceptable.
+     *
+     * Waits up to $maxSeconds; a longer wait - e.g. after Kajabi answered 429,
+     * which blocks the IP for Retry-After (600s) - still throws.
+     */
+    public function setSleepOnRateLimit(bool $sleep = true, ?int $maxSeconds = null): void
+    {
+        $this->sleepOnRateLimit = $sleep;
+
+        if ($maxSeconds !== null) {
+            $this->maxRateLimitSleepSeconds = max(0, $maxSeconds);
+        }
+    }
+
+    /**
+     * Seconds until a request would be allowed again (0 = now), e.g. to delay a queued job
+     */
+    public function secondsUntilAvailable(): int
+    {
+        $limit = $this->getExceededLimit();
+
+        return $limit instanceof Limit ? max(0, $limit->getRemainingSeconds()) : 0;
+    }
+
+    /**
      * Rate limits for Kajabi
+     *
+     * The plugin also records Kajabi's own 429s (too_many_attempts_limit) for
+     * their Retry-After, so no request is sent while the IP is blocked -
+     * requests during a block risk extending it.
      *
      * @return array
      */
     protected function resolveLimits(): array
     {
-        return [
-            Limit::allow(requests: $this->rateLimit, threshold: 0.99)
-                ->everyMinute()
-                ->name('kajabi-api')
-        ];
+        $limit = Limit::allow(requests: $this->rateLimit, threshold: 0.99)
+            ->everyMinute()
+            ->name($this->rateLimitName);
+
+        return [$this->sleepOnRateLimit ? $limit->sleep() : $limit];
+    }
+
+    /**
+     * A fixed prefix, so subclasses (named differently) still share the bucket.
+     * The plugin's default is the class's short name.
+     */
+    protected function getLimiterPrefix(): ?string
+    {
+        return 'kajabi';
+    }
+
+    /**
+     * Sleep only for short waits; anything longer throws
+     */
+    protected function handleExceededLimit(Limit $limit, PendingRequest $pendingRequest): void
+    {
+        if ($limit->getShouldSleep() && $limit->getRemainingSeconds() > $this->maxRateLimitSleepSeconds) {
+            $this->throwLimitException($limit);
+        }
+
+        $this->traitHandleExceededLimit($limit, $pendingRequest);
     }
 
     /**
@@ -127,6 +266,27 @@ class KajabiConnector extends Connector implements HasPagination
      */
     public function paginate(Request $request): CursorPaginator
     {
+        $filters = $request->query()->all();
+
+        // Check for start page - Kajabi 'page[number]' or Thinkific 'page' or 'start_page'
+        $startPage = $filters['page[number]'] ?? $filters['page'] ?? $filters['start_page'] ?? 1;
+
+        // Check for page limit - Kajabi 'page[size]' or Thinkific 'limit'
+        $pageLimit = $filters['page[size]'] ?? $filters['limit'] ?? null;
+
+        // Paging controls are read here, and Kajabi ignores them, so they aren't
+        // sent: limit/page become page[size]/page[number]. This has to happen
+        // before the paginator is built - it keeps a copy of the request.
+        foreach (['limit', 'page', 'start_page', 'max_pages'] as $control) {
+            $request->query()->remove($control);
+        }
+        if (is_numeric($pageLimit) && $request->query()->get('page[size]') === null) {
+            $request->query()->add('page[size]', (int) $pageLimit);
+        }
+        if ((int) $startPage > 1 && $request->query()->get('page[number]') === null) {
+            $request->query()->add('page[number]', (int) $startPage);
+        }
+
         $paginator = new class(connector: $this, request: $request) extends CursorPaginator {
             private int $pageItemsKey;
             private array $pageItems;
@@ -153,23 +313,56 @@ class KajabiConnector extends Connector implements HasPagination
                 return $this->perPageLimit;
             }
 
+            /**
+             * meta.total - only /contacts and /customers send it (verified live);
+             * other lists answer 0. Check hasTotalAPIResults() first.
+             */
             public function getTotalAPIResults(): int
             {
-                return $this->currentResponse->json('meta.total', 0);
+                return (int) $this->currentResponse->json('meta.total', 0);
             }
 
+            public function hasTotalAPIResults(): bool
+            {
+                return $this->currentResponse->json('meta.total') !== null;
+            }
+
+            /**
+             * From meta.total where sent, else from the page[number] in links.last
+             * (offers, products, orders, purchases... send links but no meta)
+             */
             public function getTotalAPIPages(): int
             {
-                $total = $this->currentResponse->json('meta.total', 0);
+                $total = $this->currentResponse->json('meta.total');
 
-                if ($total === 0) {
-                    return 1;
+                if ($total !== null) {
+                    return $total > 0 ? (int) ceil($total / ($this->perPageLimit ?? 100)) : 1;
                 }
 
-                // Calculate from total records and page size
-                $pageSize = $this->perPageLimit ?? 100;
+                $last = $this->currentResponse->json('links.last');
 
-                return (int)ceil($total / $pageSize);
+                if (is_string($last)) {
+                    parse_str((string) parse_url($last, PHP_URL_QUERY), $query);
+
+                    if (isset($query['page']['number'])) {
+                        return max(1, (int) $query['page']['number']);
+                    }
+                }
+
+                return 1;
+            }
+
+            /**
+             * links.next of the page last fetched, or null on the last page / before the first
+             *
+             * For cursor-paged endpoints (course progress) this is where page[after]
+             * lives: GetCourseProgress::cursorFrom($paginator->nextLink()).
+             */
+            public function nextLink(): ?string
+            {
+                $next = $this->currentResponse?->json('links.next');
+
+                return is_string($next) && $next !== '' ? $next : null;
             }
 
             protected function getNextCursor(Response $response): int|string
@@ -257,15 +450,11 @@ class KajabiConnector extends Connector implements HasPagination
 
         };
 
-        $filters = $request->query()->all();
-
-        // Check for start page - Kajabi 'page[number]' or Thinkific 'page' or 'start_page'
-        $startPage = $filters['page[number]'] ?? $filters['page'] ?? $filters['start_page'] ?? 1;
         $paginator->setStartPage($startPage);
 
-        // Check for page limit - Kajabi 'page[size]' or Thinkific 'limit'
-        $pageLimit = $filters['page[size]'] ?? $filters['limit'] ?? $paginator->getPerPageLimit() ?? 100;
-        $paginator->setPerPageLimit($pageLimit);
+        if ($pageLimit !== null) {
+            $paginator->setPerPageLimit($pageLimit);
+        }
 
         $paginator->rewind();
 

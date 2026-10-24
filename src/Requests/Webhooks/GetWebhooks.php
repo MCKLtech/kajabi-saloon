@@ -7,9 +7,14 @@ use Saloon\Http\Request;
 use Saloon\PaginationPlugin\Contracts\Paginatable;
 use WooNinja\KajabiSaloon\DataTransferObjects\Webhooks\Webhook;
 use WooNinja\KajabiSaloon\Enums\WebhookEvent;
+use WooNinja\KajabiSaloon\Requests\Concerns\JsonApiQuery;
+use WooNinja\KajabiSaloon\Requests\Concerns\SupportedFilters;
+use WooNinja\KajabiSaloon\Requests\Contracts\DeclaresSupportedFilters;
 
-class GetWebhooks extends Request implements Paginatable
+class GetWebhooks extends Request implements Paginatable, DeclaresSupportedFilters
 {
+    use JsonApiQuery;
+
     protected Method $method = Method::GET;
     
     public function __construct(private array $filters = []) {}
@@ -24,9 +29,10 @@ class GetWebhooks extends Request implements Paginatable
                 case 'limit': $query['page[size]'] = $value; break;
                 case 'page': $query['page[number]'] = $value; break;
                 case 'event': $query['filter[event_eq]'] = $value instanceof WebhookEvent ? $value->value : $value; break;
-                // Skip pagination control parameters (handled by paginator, not API)
+                // Paging controls: read (and stripped) by KajabiConnector::paginate()
                 case 'start_page':
                 case 'max_pages':
+                    $query[$key] = $value;
                     break;
                 default: $query[$key] = $value; break;
             }
@@ -37,5 +43,10 @@ class GetWebhooks extends Request implements Paginatable
     public function createDtoFromResponse($response): array
     {
         return array_map(fn($hook) => Webhook::fromKajabiWebhook($hook), $response->json('data', []));
+    }
+
+    public static function supportedFilters(): array
+    {
+        return SupportedFilters::HOOKS;
     }
 }

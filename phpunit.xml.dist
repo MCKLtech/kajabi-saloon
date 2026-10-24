@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:noNamespaceSchemaLocation="https://schema.phpunit.de/10.0/phpunit.xsd"
+         bootstrap="vendor/autoload.php"
+         colors="true"
+         failOnRisky="true"
+         failOnWarning="true"
+         stopOnFailure="false"
+         cacheDirectory=".phpunit.cache">
+    <extensions>
+        <bootstrap class="Tests\Support\ResetRateLimitStoreExtension"/>
+    </extensions>
+    <testsuites>
+        <testsuite name="Unit">
+            <directory>tests/Unit</directory>
+        </testsuite>
+        <testsuite name="Integration">
+            <directory>tests/Integration</directory>
+        </testsuite>
+        <testsuite name="Compatibility">
+            <directory>tests/Compatibility</directory>
+        </testsuite>
+    </testsuites>
+    <source>
+        <include>
+            <directory>src</directory>
+        </include>
+        <exclude>
+            <directory>src/Services/BundleService.php</directory>
+            <directory>src/Services/ChapterService.php</directory>
+            <directory>src/Services/ContentService.php</directory>
+            <directory>src/Services/CouponService.php</directory>
+            <directory>src/Services/CourseReviewService.php</directory>
+            <directory>src/Services/CustomProfileFieldDefinitionService.php</directory>
+            <directory>src/Services/GroupService.php</directory>
+            <directory>src/Services/InstructorService.php</directory>
+            <directory>src/Services/PromotionService.php</directory>
+            <directory>src/Services/SiteScriptService.php</directory>
+            <directory>src/Services/OAuthService.php</directory>
+        </exclude>
+    </source>
+    <php>
+        <env name="KAJABI_CLIENT_ID" value="test-client-id"/>
+        <env name="KAJABI_CLIENT_SECRET" value="test-client-secret"/>
+        <env name="KAJABI_SITE_ID" value="test-site-123"/>
+    </php>
+</phpunit>

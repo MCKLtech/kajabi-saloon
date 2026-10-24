@@ -17,8 +17,11 @@ use WooNinja\KajabiSaloon\Services\CourseProgressService;
  *    never show up in updated_since).
  *
  * Storage stays with the caller: pass an upsert callback keyed on $row->id, and
- * persist SyncResult::$started_at only after the run returns. If a run throws,
+ * persist SyncResult::$started_at only after the run completes. If a run throws,
  * don't advance it - the next run repeats the same window.
+ *
+ * Long walks can be parked: pass $shouldStop (e.g. a deadline check), store
+ * $result->checkpoint() when !$result->isComplete(), and resume() it later.
  *
  * ```php
  * $result = $kajabi->courseProgress->sync()->incremental($courseId, $lastStartedAt, fn($row) => $repo->upsert($row));
@@ -26,6 +29,13 @@ use WooNinja\KajabiSaloon\Services\CourseProgressService;
  *
  * $result = $kajabi->courseProgress->sync()->full($courseId, fn($row) => $repo->upsert($row));
  * $repo->deleteIds($result->missingFrom($repo->idsForCourse($courseId)));
+ *
+ * // With a time budget
+ * $deadline = time() + 50;
+ * $result = $checkpoint
+ *     ? $sync->resume($checkpoint, $upsert, fn() => time() >= $deadline)
+ *     : $sync->incremental($courseId, $lastStartedAt, $upsert, fn() => time() >= $deadline);
+ * $result->isComplete() ? $lastStartedAt = $result->started_at : $checkpoint = $result->checkpoint();
  * ```
  */
 final class CourseProgressSync
@@ -45,27 +55,53 @@ final class CourseProgressSync
      * Rows changed since the previous run; a null $lastSyncStartedAt runs a full walk
      *
      * @param callable(CourseProgress): void $upsert
+     * @param (callable(): bool)|null $shouldStop Asked before each page after the first;
+     *        return true to park the run (see SyncResult::checkpoint())
      */
-    public function incremental(int $productId, ?\DateTimeInterface $lastSyncStartedAt, callable $upsert): SyncResult
+    public function incremental(
+        int $productId,
+        ?\DateTimeInterface $lastSyncStartedAt,
+        callable $upsert,
+        ?callable $shouldStop = null
+    ): SyncResult
     {
         if ($lastSyncStartedAt === null) {
-            return $this->full($productId, $upsert);
+            return $this->full($productId, $upsert, $shouldStop);
         }
 
         $startedAt = CarbonImmutable::now('UTC');
         $since = $this->windowStart($lastSyncStartedAt);
 
-        return $this->walk($productId, ['updated_since' => $since], $upsert, $startedAt, $since);
+        return $this->walk($productId, $upsert, $startedAt, $since, null, $shouldStop);
     }
 
     /**
      * Every row for the course
      *
      * @param callable(CourseProgress): void $upsert
+     * @param (callable(): bool)|null $shouldStop Asked before each page after the first
      */
-    public function full(int $productId, callable $upsert): SyncResult
+    public function full(int $productId, callable $upsert, ?callable $shouldStop = null): SyncResult
     {
-        return $this->walk($productId, [], $upsert, CarbonImmutable::now('UTC'), null);
+        return $this->walk($productId, $upsert, CarbonImmutable::now('UTC'), null, null, $shouldStop);
+    }
+
+    /**
+     * Continue a parked run from its checkpoint, with its original window and start time
+     *
+     * @param callable(CourseProgress): void $upsert
+     * @param (callable(): bool)|null $shouldStop Asked before each page after the first
+     */
+    public function resume(SyncCheckpoint $checkpoint, callable $upsert, ?callable $shouldStop = null): SyncResult
+    {
+        return $this->walk(
+            $checkpoint->product_id,
+            $upsert,
+            $checkpoint->started_at,
+            $checkpoint->full ? null : $checkpoint->updated_since,
+            $checkpoint->after,
+            $shouldStop
+        );
     }
 
     /**
@@ -80,22 +116,39 @@ final class CourseProgressSync
 
     private function walk(
         int $productId,
-        array $filters,
         callable $upsert,
         CarbonImmutable $startedAt,
-        ?CarbonImmutable $since
+        ?CarbonImmutable $since,
+        ?string $after,
+        ?callable $shouldStop
     ): SyncResult
     {
-        $rowIds = [];
-        $rows = $this->service->forCourse(
-            $productId,
-            $filters + ['limit' => GetCourseProgress::MAX_PAGE_SIZE]
-        );
+        $filters = ['limit' => GetCourseProgress::MAX_PAGE_SIZE];
 
-        foreach ($rows->items() as $row) {
-            $upsert($row);
-            $rowIds[$row->id] = true;
+        if ($since !== null) {
+            $filters['updated_since'] = $since;
         }
+
+        $resumed = $after !== null;
+        $rowIds = [];
+        $first = true;
+
+        do {
+            // Always fetch one page, so every call makes progress
+            if (!$first && $shouldStop !== null && $shouldStop()) {
+                break;
+            }
+
+            $page = $this->service->page($productId, $filters, $after);
+
+            foreach ($page->rows as $row) {
+                $upsert($row);
+                $rowIds[$row->id] = true;
+            }
+
+            $after = $page->nextCursor;
+            $first = false;
+        } while ($after !== null);
 
         return new SyncResult(
             product_id: $productId,
@@ -103,6 +156,8 @@ final class CourseProgressSync
             full: $since === null,
             updated_since: $since,
             row_ids: array_keys($rowIds),
+            next_cursor: $after,
+            resumed: $resumed,
         );
     }
 }

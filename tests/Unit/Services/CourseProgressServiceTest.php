@@ -10,7 +10,10 @@ use Saloon\Http\Faking\MockResponse;
 use Tests\Fixtures\MemberActivityPayloads;
 use WooNinja\KajabiSaloon\Connectors\KajabiConnector;
 use WooNinja\KajabiSaloon\DataTransferObjects\CourseProgress\CourseProgress;
+use WooNinja\KajabiSaloon\DataTransferObjects\CourseProgress\CourseProgressPage;
 use WooNinja\KajabiSaloon\DataTransferObjects\CourseProgress\LessonProgress;
+use WooNinja\KajabiSaloon\Exceptions\CourseProgressForbiddenException;
+use WooNinja\KajabiSaloon\Exceptions\CourseProgressNotFoundException;
 use WooNinja\KajabiSaloon\Exceptions\FeatureNotEnabledException;
 use WooNinja\KajabiSaloon\Requests\CourseProgress\GetCourseProgress;
 use WooNinja\KajabiSaloon\Services\CourseProgressService;
@@ -174,6 +177,67 @@ class CourseProgressServiceTest extends TestCase
         }
     }
 
+    public function test_cursor_from_next_link(): void
+    {
+        // As Kajabi sends it (verified live): brackets percent-encoded
+        $this->assertSame('700001', GetCourseProgress::cursorFrom(
+            'https://api.kajabi.com/v1/course_progress?filter%5Bproduct_id%5D=2000101&filter%5Bsite_id%5D=1&page%5Bafter%5D=700001&page%5Bsize%5D=3'
+        ));
+        $this->assertSame('900002', GetCourseProgress::cursorFrom(
+            'https://api.kajabi.com/v1/course_progress?filter[product_id]=1&page[size]=2&page[after]=900002'
+        ));
+        $this->assertNull(GetCourseProgress::cursorFrom(null));
+        $this->assertNull(GetCourseProgress::cursorFrom(''));
+        $this->assertNull(GetCourseProgress::cursorFrom('https://api.kajabi.com/v1/course_progress?page[size]=2'));
+    }
+
+    public function test_page_returns_rows_and_next_cursor(): void
+    {
+        $mockClient = new MockClient([
+            MockResponse::make(MemberActivityPayloads::progressPage(
+                [MemberActivityPayloads::progressRowComplete(), MemberActivityPayloads::progressRowPartial()],
+                nextAfter: '900002'
+            )),
+            MockResponse::make(MemberActivityPayloads::progressPage([MemberActivityPayloads::progressRowEmpty()])),
+        ]);
+        $service = $this->serviceWithMock($mockClient);
+
+        $first = $service->page(2000001, ['limit' => 2]);
+
+        $this->assertInstanceOf(CourseProgressPage::class, $first);
+        $this->assertSame([900001, 900002], array_map(fn(CourseProgress $r) => $r->id, $first->rows));
+        $this->assertSame('900002', $first->nextCursor);
+        $this->assertTrue($first->hasMore());
+        $this->assertArrayNotHasKey('page[after]', $mockClient->getLastPendingRequest()->query()->all());
+
+        $second = $service->page(2000001, ['limit' => 2, 'after' => 'ignored'], $first->nextCursor);
+
+        $this->assertSame([900003], array_map(fn(CourseProgress $r) => $r->id, $second->rows));
+        $this->assertNull($second->nextCursor);
+        $this->assertFalse($second->hasMore());
+
+        $query = $mockClient->getLastPendingRequest()->query()->all();
+        $this->assertSame('900002', $query['page[after]'], 'the $after argument wins over a filter');
+        $this->assertSame(2, $query['page[size]']);
+        $mockClient->assertSentCount(2);
+    }
+
+    public function test_paginator_exposes_next_link(): void
+    {
+        $mockClient = new MockClient([
+            MockResponse::make(MemberActivityPayloads::progressPage([MemberActivityPayloads::progressRowComplete()], nextAfter: '900001')),
+            MockResponse::make(MemberActivityPayloads::progressPage([MemberActivityPayloads::progressRowPartial()])),
+        ]);
+        $paginator = $this->serviceWithMock($mockClient)->forCourse(2000001);
+
+        $paginator->current();
+        $this->assertSame('900001', GetCourseProgress::cursorFrom($paginator->nextLink()));
+
+        $paginator->next();
+        $paginator->current();
+        $this->assertNull($paginator->nextLink());
+    }
+
     public function test_for_course_with_start_page_never_sends_page_number(): void
     {
         $mockClient = new MockClient([MockResponse::make(MemberActivityPayloads::progressPage([]))]);
@@ -244,16 +308,67 @@ class CourseProgressServiceTest extends TestCase
         $this->collect($this->serviceWithMock($mockClient)->forCourse(2000001));
     }
 
+    /**
+     * Kajabi's real 404 body (verified live for AccessGroup/Coaching products and unknown ids)
+     */
+    private static function notFoundBody(): array
+    {
+        return ['errors' => [[
+            'status' => '404', 'source' => null, 'title' => 'Not Found',
+            'detail' => 'Could not find the specified resource.',
+        ]]];
+    }
+
+    public function test_404_throws_course_progress_not_found(): void
+    {
+        $mockClient = new MockClient([MockResponse::make(self::notFoundBody(), 404)]);
+
+        try {
+            $this->serviceWithMock($mockClient)->forCustomer(2000202, 1);
+            $this->fail('Expected CourseProgressNotFoundException');
+        } catch (CourseProgressNotFoundException $e) {
+            $this->assertInstanceOf(RequestException::class, $e, 'existing RequestException handlers still catch it');
+            $this->assertSame(404, $e->getResponse()->status());
+            $this->assertSame(2000202, $e->productId);
+            $this->assertStringContainsString('2000202', $e->getMessage());
+        }
+    }
+
+    public function test_404_throws_course_progress_not_found_while_paginating(): void
+    {
+        $mockClient = new MockClient([MockResponse::make(self::notFoundBody(), 404)]);
+
+        $this->expectException(CourseProgressNotFoundException::class);
+
+        $this->collect($this->serviceWithMock($mockClient)->forCourse(2000202));
+    }
+
+    public function test_403_throws_course_progress_forbidden(): void
+    {
+        $mockClient = new MockClient([MockResponse::make(['errors' => [['status' => '403', 'title' => 'Forbidden']]], 403)]);
+
+        try {
+            $this->collect($this->serviceWithMock($mockClient)->forCourse(2000001));
+            $this->fail('Expected CourseProgressForbiddenException');
+        } catch (CourseProgressForbiddenException $e) {
+            $this->assertInstanceOf(RequestException::class, $e);
+            $this->assertSame(403, $e->getResponse()->status());
+            $this->assertSame(2000001, $e->productId);
+        }
+    }
+
     public function test_other_errors_are_regular_request_exceptions(): void
     {
-        $mockClient = new MockClient([MockResponse::make(['errors' => []], 404)]);
+        $mockClient = new MockClient([MockResponse::make(['errors' => [['status' => '400']]], 400)]);
 
         try {
             $this->serviceWithMock($mockClient)->forCustomer(999, 1);
             $this->fail('Expected RequestException');
         } catch (RequestException $e) {
             $this->assertNotInstanceOf(FeatureNotEnabledException::class, $e);
-            $this->assertSame(404, $e->getResponse()->status());
+            $this->assertNotInstanceOf(CourseProgressNotFoundException::class, $e);
+            $this->assertNotInstanceOf(CourseProgressForbiddenException::class, $e);
+            $this->assertSame(400, $e->getResponse()->status());
         }
     }
 

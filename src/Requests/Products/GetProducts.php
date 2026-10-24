@@ -6,9 +6,19 @@ use Saloon\Enums\Method;
 use Saloon\Http\Request;
 use Saloon\PaginationPlugin\Contracts\Paginatable;
 use WooNinja\KajabiSaloon\DataTransferObjects\Products\Product;
+use WooNinja\KajabiSaloon\Requests\Concerns\JsonApiQuery;
+use WooNinja\KajabiSaloon\Requests\Concerns\SupportedFilters;
+use WooNinja\KajabiSaloon\Requests\Contracts\DeclaresSupportedFilters;
 
-class GetProducts extends Request implements Paginatable
+class GetProducts extends Request implements Paginatable, DeclaresSupportedFilters
 {
+    use JsonApiQuery;
+
+    /**
+     * productizable type of cohort courses (per the spec), for exclude_product_types
+     */
+    public const COHORT_COURSE = 'Courses::CohortCourse';
+
     protected Method $method = Method::GET;
 
     public function __construct(
@@ -44,6 +54,15 @@ class GetProducts extends Request implements Paginatable
                 case 'description_cont':
                     $query['filter[description_cont]'] = $value;
                     break;
+                case 'exclude_product_types':
+                    // Fully-qualified productizable types, e.g. self::COHORT_COURSE
+                    $types = array_values((array) $value);
+                    if (count($types) === 1) {
+                        $query['filter[exclude_product_types][]'] = $types[0];
+                    } elseif ($types !== []) {
+                        $query['filter[exclude_product_types]'] = $types;
+                    }
+                    break;
                 default:
                     // Pass through other filters as-is
                     $query[$key] = $value;
@@ -66,5 +85,10 @@ class GetProducts extends Request implements Paginatable
         return array_map(function ($product) {
             return Product::fromKajabiProduct($product);
         }, $data);
+    }
+
+    public static function supportedFilters(): array
+    {
+        return SupportedFilters::PRODUCTS;
     }
 }

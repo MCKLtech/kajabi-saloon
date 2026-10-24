@@ -38,6 +38,7 @@ final class User implements UserInterface
         public ?Carbon $updated_at = null,
         // Customer record for this contact (set once they have an offer or purchase)
         public ?int    $customer_id = null,
+        public ?string $external_user_id = null,
     )
     {
     }
@@ -111,6 +112,9 @@ final class User implements UserInterface
                 : null,
             customer_id: isset($contact['relationships']['customer']['data']['id'])
                 ? (int) $contact['relationships']['customer']['data']['id']
+                : null,
+            external_user_id: isset($contact['attributes']['external_user_id'])
+                ? (string) $contact['attributes']['external_user_id']
                 : null,
         );
     }

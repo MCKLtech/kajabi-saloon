@@ -6,6 +6,9 @@ use Saloon\Exceptions\Request\FatalRequestException;
 use Saloon\Exceptions\Request\RequestException;
 use Saloon\PaginationPlugin\Paginator;
 use WooNinja\KajabiSaloon\DataTransferObjects\CourseProgress\CourseProgress;
+use WooNinja\KajabiSaloon\DataTransferObjects\CourseProgress\CourseProgressPage;
+use WooNinja\KajabiSaloon\Exceptions\CourseProgressForbiddenException;
+use WooNinja\KajabiSaloon\Exceptions\CourseProgressNotFoundException;
 use WooNinja\KajabiSaloon\Exceptions\FeatureNotEnabledException;
 use WooNinja\KajabiSaloon\Requests\CourseProgress\GetCourseProgress;
 use WooNinja\KajabiSaloon\Sync\CourseProgressSync;
@@ -14,10 +17,14 @@ use WooNinja\KajabiSaloon\Sync\CourseProgressSync;
  * Course progress (GET /v1/course_progress)
  *
  * Every member's progress in one course, with per-lesson detail. Use it to
- * backfill and to catch webhooks that were never delivered. Throws
- * FeatureNotEnabledException on a 423.
+ * backfill and to catch webhooks that were never delivered.
  *
- * Course ids are Kajabi product ids. Cohort courses return 404.
+ * Errors: 423 FeatureNotEnabledException, 403 CourseProgressForbiddenException,
+ * 404 CourseProgressNotFoundException (not a "Course" product - community,
+ * coaching, podcast, cohort - or not on this account; permanent for that id).
+ *
+ * Course ids are Kajabi product ids (and equal the /v1/courses id).
+ * Pages hold at most 100 rows; a larger page[size] is silently capped.
  */
 class CourseProgressService extends Resource
 {
@@ -29,6 +36,43 @@ class CourseProgressService extends Resource
     public function forCourse(int $productId, array $filters = []): Paginator
     {
         return $this->connector->paginate(new GetCourseProgress($productId, $filters));
+    }
+
+    /**
+     * One page of rows, for walks that must stop and resume (time budgets, queued jobs)
+     *
+     * ```php
+     * $after = $store->cursor($productId);          // null = start
+     * do {
+     *     $page = $kajabi->courseProgress->page($productId, ['limit' => 100], $after);
+     *     foreach ($page->rows as $row) { $repo->upsert($row); }
+     *     $store->saveCursor($productId, $after = $page->nextCursor);
+     * } while ($page->hasMore() && !$deadlineReached());
+     * ```
+     *
+     * @param array $filters customer_id, updated_since, limit (max 100)
+     * @param string|null $after Cursor from the previous page's nextCursor; null for the first page
+     * @throws FeatureNotEnabledException
+     * @throws CourseProgressForbiddenException
+     * @throws CourseProgressNotFoundException
+     * @throws FatalRequestException
+     * @throws RequestException
+     */
+    public function page(int $productId, array $filters = [], ?string $after = null): CourseProgressPage
+    {
+        unset($filters['after'], $filters['page[after]']);
+
+        if ($after !== null) {
+            $filters['after'] = $after;
+        }
+
+        $response = $this->connector->send(new GetCourseProgress($productId, $filters));
+
+        return new CourseProgressPage(
+            product_id: $productId,
+            rows: $response->dtoOrFail(),
+            nextCursor: GetCourseProgress::cursorFrom($response->json('links.next')),
+        );
     }
 
     /**

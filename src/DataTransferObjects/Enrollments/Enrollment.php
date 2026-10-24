@@ -8,6 +8,14 @@ use WooNinja\KajabiSaloon\Services\UserService;
 use WooNinja\LMSContracts\Contracts\DTOs\Enrollments\EnrollmentInterface;
 use WooNinja\LMSContracts\Contracts\DTOs\Users\UserInterface;
 
+/**
+ * Progress: $percentage_completed and $completed can't be null under
+ * EnrollmentInterface, so $progress_known says whether they are real. It is
+ * false from fromKajabiOffer()/fromKajabiPurchase() (Kajabi sends no progress
+ * there; the 0.0/false are placeholders) and true once withCourseProgress()
+ * has applied course progress rows. Don't persist placeholder progress over
+ * real values.
+ */
 final class Enrollment implements EnrollmentInterface
 {
     public function __construct(
@@ -32,6 +40,7 @@ final class Enrollment implements EnrollmentInterface
         // Additional Kajabi-specific fields
         public ?string    $status = null,
         public ?string    $created_at = null,
+        public bool       $progress_known = false,
     )
     {
     }
@@ -44,10 +53,22 @@ final class Enrollment implements EnrollmentInterface
      * @param string $customerEmail Customer email
      * @param string $customerName Customer name
      * @param UserInterface|null $contact
+     * @param \DateTimeInterface|null $grantedAt When the offer was granted, if the caller knows (e.g. it
+     *        just granted it). Kajabi's offer relationships carry no grant date, so without it
+     *        started_at, activated_at and created_at are null rather than a made-up "now".
      * @return self
      */
-    public static function fromKajabiOffer(array $offer, int $customerId, string $customerEmail, string $customerName, ?UserInterface $contact = null): self
+    public static function fromKajabiOffer(
+        array $offer,
+        int $customerId,
+        string $customerEmail,
+        string $customerName,
+        ?UserInterface $contact = null,
+        ?\DateTimeInterface $grantedAt = null
+    ): self
     {
+        $granted = $grantedAt !== null ? Carbon::instance($grantedAt) : null;
+
         $offerId = (int)$offer['id'];
         $offerTitle = $offer['attributes']['title'] ?? $offer['attributes']['internal_title'] ?? '';
 
@@ -70,20 +91,21 @@ final class Enrollment implements EnrollmentInterface
             user_id: $customerId, // This is customer_id
             course_name: $offerTitle,
             course_id: $offerId, // course_id is offer_id
-            percentage_completed: 0.0,
+            percentage_completed: 0.0, // placeholder: progress_known is false
             expired: false,
             is_free_trial: false, //Concept of free trial does not exist in Kajabi
             completed: false,
-            started_at: Carbon::now(), // Granted now
-            activated_at: Carbon::now(),
+            started_at: $granted,
+            activated_at: $granted?->copy(),
             completed_at: null,
-            updated_at: Carbon::now(),
+            updated_at: Carbon::now(), // required by the contract; the time this was read, not a grant date
             expiry_date: null,
             credential_id: null,
             certificate_url: null,
             certificate_expiry_date: null,
             status: 'active',
-            created_at: Carbon::now()->toISOString(),
+            created_at: $granted?->toISOString(),
+            progress_known: false,
         );
     }
 
@@ -97,7 +119,8 @@ final class Enrollment implements EnrollmentInterface
      * - completed_at: latest lesson completion when completed, otherwise null
      * - updated_at: latest row update (falls back to the existing value)
      *
-     * With no rows (no progress record yet, or no course products) it's returned unchanged.
+     * Sets progress_known. With no rows (no progress record yet, or no course
+     * products) it's returned unchanged, so progress_known stays as it was.
      *
      * @param CourseProgress[] $rows
      */
@@ -132,6 +155,7 @@ final class Enrollment implements EnrollmentInterface
 
         $allCompleted = array_reduce($rows, fn(bool $carry, CourseProgress $row) => $carry && $row->completed, true);
 
+        $enrollment->progress_known = true;
         $enrollment->percentage_completed = $totalLessons > 0
             ? round($completedLessons / $totalLessons, 4)
             : ($allCompleted ? 1.0 : 0.0);
@@ -229,10 +253,13 @@ final class Enrollment implements EnrollmentInterface
             throw new \Exception('Invalid purchase data: missing offer_id');
         }
 
-        // Determine enrollment status from the purchase's own status field
+        // Purchases have no status attribute live; deactivated_at is the signal. It can
+        // be in the future (a scheduled end - filter[active]=true still returns those),
+        // so only a past deactivated_at means the access has ended.
         $deactivatedAt = $purchase['attributes']['deactivated_at'] ?? null;
-        $status = $purchase['attributes']['status'] ?? ($deactivatedAt ? 'deactivated' : 'active');
-        $expired = in_array($status, ['expired', 'cancelled', 'deactivated'], true) || $deactivatedAt !== null;
+        $deactivated = $deactivatedAt !== null && Carbon::parse($deactivatedAt)->lte(Carbon::now());
+        $status = $purchase['attributes']['status'] ?? ($deactivated ? 'deactivated' : 'active');
+        $expired = in_array($status, ['expired', 'cancelled', 'deactivated'], true);
         $completed = $status === 'completed';
         $isFreeTrial = (int)($purchase['attributes']['amount_in_cents'] ?? $purchase['attributes']['amount'] ?? 0) === 0;
         $expiresAt = $purchase['attributes']['expires_at'] ?? null;
@@ -244,7 +271,7 @@ final class Enrollment implements EnrollmentInterface
             user_id: $contactId,
             course_name: $courseName,
             course_id: $courseId, // This is the product_id
-            percentage_completed: 0.0, // Kajabi doesn't track completion percentage the same way
+            percentage_completed: 0.0, // placeholder: purchases carry no progress (progress_known is false)
             expired: $expired,
             is_free_trial: $isFreeTrial,
             completed: $completed,
@@ -267,6 +294,7 @@ final class Enrollment implements EnrollmentInterface
             // Kajabi-specific fields
             status: $status,
             created_at: $purchase['attributes']['created_at'] ?? null,
+            progress_known: false,
         );
     }
 

@@ -6,9 +6,14 @@ use Saloon\Enums\Method;
 use Saloon\Http\Request;
 use Saloon\PaginationPlugin\Contracts\Paginatable;
 use WooNinja\KajabiSaloon\DataTransferObjects\Customers\Customer;
+use WooNinja\KajabiSaloon\Requests\Concerns\JsonApiQuery;
+use WooNinja\KajabiSaloon\Requests\Concerns\SupportedFilters;
+use WooNinja\KajabiSaloon\Requests\Contracts\DeclaresSupportedFilters;
 
-class GetCustomers extends Request implements Paginatable
+class GetCustomers extends Request implements Paginatable, DeclaresSupportedFilters
 {
+    use JsonApiQuery;
+
     protected Method $method = Method::GET;
 
     public function __construct(
@@ -30,9 +35,10 @@ class GetCustomers extends Request implements Paginatable
                 case 'page': $query['page[number]'] = $value; break;
                 case 'site_id': $query['filter[site_id]'] = $value; break;
                 case 'search': $query['filter[search]'] = $value; break;
-                // Skip pagination control parameters (handled by paginator, not API)
+                // Paging controls: read (and stripped) by KajabiConnector::paginate()
                 case 'start_page':
                 case 'max_pages':
+                    $query[$key] = $value;
                     break;
                 default: $query[$key] = $value; break;
             }
@@ -47,5 +53,10 @@ class GetCustomers extends Request implements Paginatable
     {
         $data = $response->json('data', []);
         return array_map(fn($customer) => Customer::fromKajabiCustomer($customer), $data);
+    }
+
+    public static function supportedFilters(): array
+    {
+        return SupportedFilters::CUSTOMERS;
     }
 }

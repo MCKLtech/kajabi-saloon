@@ -6,9 +6,14 @@ use Saloon\Enums\Method;
 use Saloon\Http\Request;
 use Saloon\PaginationPlugin\Contracts\Paginatable;
 use WooNinja\KajabiSaloon\DataTransferObjects\Users\User;
+use WooNinja\KajabiSaloon\Requests\Concerns\JsonApiQuery;
+use WooNinja\KajabiSaloon\Requests\Concerns\SupportedFilters;
+use WooNinja\KajabiSaloon\Requests\Contracts\DeclaresSupportedFilters;
 
-class GetContacts extends Request implements Paginatable
+class GetContacts extends Request implements Paginatable, DeclaresSupportedFilters
 {
+    use JsonApiQuery;
+
     protected Method $method = Method::GET;
 
     public function __construct(
@@ -63,5 +68,10 @@ class GetContacts extends Request implements Paginatable
         return array_map(function ($contact) {
             return User::fromKajabiContact($contact);
         }, $data);
+    }
+
+    public static function supportedFilters(): array
+    {
+        return SupportedFilters::CONTACTS;
     }
 }

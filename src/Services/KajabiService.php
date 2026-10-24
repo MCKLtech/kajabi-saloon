@@ -3,6 +3,7 @@
 namespace WooNinja\KajabiSaloon\Services;
 
 use Saloon\Contracts\Authenticator;
+use WooNinja\KajabiSaloon\Auth\AccessToken;
 use WooNinja\KajabiSaloon\Auth\KajabiAuthenticator;
 use WooNinja\KajabiSaloon\Connectors\KajabiConnector;
 use WooNinja\KajabiSaloon\Interfaces\Kajabi;
@@ -110,8 +111,10 @@ final class KajabiService implements Kajabi, LMSServiceInterface
         $connector = new KajabiConnector();
         $authenticator = $this->authenticator();
         $authenticator->connector = $connector; // Set connector for authentication
-        
-        return $connector->authenticate($authenticator);
+
+        // Kept, so every service shares it and $kajabi->connector()->setRateLimit()
+        // etc. configure the connector that actually sends
+        return $this->connector = $connector->authenticate($authenticator);
     }
 
     /**
@@ -181,14 +184,32 @@ final class KajabiService implements Kajabi, LMSServiceInterface
     }
 
     /**
+     * The current token with its expiry and refresh token, or null before the first exchange
+     */
+    public function getToken(): ?AccessToken
+    {
+        $authenticator = $this->authenticator();
+
+        return $authenticator instanceof KajabiAuthenticator ? $authenticator->getToken() : null;
+    }
+
+    /**
+     * Unix time the current token expires (Kajabi's expiry, no safety margin), or null when unknown
+     */
+    public function getTokenExpiresAt(): ?int
+    {
+        return $this->getToken()?->expiresAt;
+    }
+
+    /**
      * Set the access token to bypass authentication
      *
-     * @param string $token
+     * @param string|AccessToken $token A cached AccessToken keeps its own expiry
      * @param int|null $expiresIn Seconds until expiry (from the token response); when set,
      *                            a new token is fetched shortly before it runs out
      * @return void
      */
-    public function setAccessToken(string $token, ?int $expiresIn = null): void
+    public function setAccessToken(string|AccessToken $token, ?int $expiresIn = null): void
     {
         $authenticator = $this->authenticator();
         
@@ -202,23 +223,38 @@ final class KajabiService implements Kajabi, LMSServiceInterface
      * Useful for caching the token before making API requests
      *
      * @return string|null
+     * @see fetchAccessToken() for the expiry and refresh token as well
      */
     public function authenticate(): ?string
     {
+        return $this->authenticator() instanceof KajabiAuthenticator
+            ? $this->fetchAccessToken()->token
+            : null;
+    }
+
+    /**
+     * Exchange the client credentials for a new token and return it with its expiry
+     *
+     * ```php
+     * $token = $kajabi->fetchAccessToken();
+     * Cache::put('kajabi_token', $token, $token->secondsRemaining());
+     * // later
+     * $kajabi->setAccessToken(Cache::get('kajabi_token'));
+     * ```
+     *
+     * @throws \LogicException when a custom (non-Kajabi) authenticator is set
+     */
+    public function fetchAccessToken(): AccessToken
+    {
         $authenticator = $this->authenticator();
-        
-        if ($authenticator instanceof KajabiAuthenticator) {
-            $authenticator->connector = $this->connector();
-            // Trigger authentication by calling the private authenticate method via reflection
-            $reflection = new \ReflectionClass($authenticator);
-            $method = $reflection->getMethod('authenticate');
-            $method->setAccessible(true);
-            $method->invoke($authenticator);
-            
-            return $authenticator->getAccessToken();
+
+        if (!$authenticator instanceof KajabiAuthenticator) {
+            throw new \LogicException('fetchAccessToken() needs the KajabiAuthenticator');
         }
-        
-        return null;
+
+        $authenticator->connector = $this->connector();
+
+        return $authenticator->refresh();
     }
 
     /**

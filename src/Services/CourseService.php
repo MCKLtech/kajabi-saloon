@@ -6,6 +6,10 @@ use Saloon\Exceptions\Request\FatalRequestException;
 use Saloon\Exceptions\Request\RequestException;
 use Saloon\PaginationPlugin\Paginator;
 use WooNinja\KajabiSaloon\DataTransferObjects\Courses\Course;
+use WooNinja\KajabiSaloon\DataTransferObjects\Courses\CourseStructure;
+use WooNinja\KajabiSaloon\DataTransferObjects\Lessons\Lesson;
+use WooNinja\KajabiSaloon\DataTransferObjects\Modules\Module;
+use WooNinja\KajabiSaloon\Requests\Courses\GetCourseStructure;
 use WooNinja\KajabiSaloon\Requests\Offers\GetOffer;
 use WooNinja\KajabiSaloon\Requests\Offers\GetOffers;
 use WooNinja\LMSContracts\Contracts\Services\CourseServiceInterface;
@@ -114,5 +118,41 @@ class CourseService extends Resource implements CourseServiceInterface
     public function chapters(int $productable_id): Paginator
     {
         throw new \Exception('Chapter listing not yet implemented for Kajabi. Kajabi uses: Offers → Products → Courses → Modules → Lessons hierarchy.');
+    }
+
+    /**
+     * Modules and lessons of a course product, in order, from one request
+     *
+     * Takes a PRODUCT id (a "Course" product's id is also its /v1/courses id),
+     * not the offer id the rest of this service uses. Kajabi has no lesson or
+     * module endpoints, so this is the only source of titles and order.
+     *
+     * @throws RequestException 404 for products that aren't courses, 403 for ids not on the account
+     */
+    public function structure(int $productId): CourseStructure
+    {
+        return $this->connector->send(new GetCourseStructure($productId))->dtoOrFail();
+    }
+
+    /**
+     * Lessons of a course product, ordered by module then position
+     *
+     * @return Lesson[]
+     * @throws RequestException
+     */
+    public function lessons(int $productId): array
+    {
+        return $this->structure($productId)->lessons;
+    }
+
+    /**
+     * Modules of a course product, ordered by position
+     *
+     * @return Module[]
+     * @throws RequestException
+     */
+    public function modules(int $productId): array
+    {
+        return $this->structure($productId)->modules;
     }
 }

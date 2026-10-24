@@ -5,9 +5,12 @@ namespace WooNinja\KajabiSaloon\Requests\Courses;
 use Saloon\Enums\Method;
 use Saloon\Http\Request;
 use WooNinja\KajabiSaloon\DataTransferObjects\Courses\Course;
+use WooNinja\KajabiSaloon\Requests\Concerns\JsonApiQuery;
 
 class GetCourse extends Request
 {
+    use JsonApiQuery;
+
     protected Method $method = Method::GET;
 
     public function __construct(

@@ -6,9 +6,14 @@ use Saloon\Enums\Method;
 use Saloon\Http\Request;
 use Saloon\PaginationPlugin\Contracts\Paginatable;
 use WooNinja\KajabiSaloon\DataTransferObjects\Enrollments\Enrollment;
+use WooNinja\KajabiSaloon\Requests\Concerns\JsonApiQuery;
+use WooNinja\KajabiSaloon\Requests\Concerns\SupportedFilters;
+use WooNinja\KajabiSaloon\Requests\Contracts\DeclaresSupportedFilters;
 
-class GetPurchases extends Request implements Paginatable
+class GetPurchases extends Request implements Paginatable, DeclaresSupportedFilters
 {
+    use JsonApiQuery;
+
     protected Method $method = Method::GET;
 
     public function __construct(
@@ -30,6 +35,17 @@ class GetPurchases extends Request implements Paginatable
             switch ($key) {
                 case 'site_id':
                     $query['filter[site_id]'] = $value;
+                    break;
+                case 'limit':
+                    $query['page[size]'] = $value;
+                    break;
+                case 'page':
+                    $query['page[number]'] = $value;
+                    break;
+                // Paging controls: read (and stripped) by KajabiConnector::paginate()
+                case 'start_page':
+                case 'max_pages':
+                    $query[$key] = $value;
                     break;
                 // Thinkific-style query filters
                 case 'query[user_id]':
@@ -86,5 +102,10 @@ class GetPurchases extends Request implements Paginatable
         return array_map(function ($purchase) use ($includedMap) {
             return Enrollment::fromKajabiPurchase($purchase, $includedMap);
         }, $data);
+    }
+
+    public static function supportedFilters(): array
+    {
+        return SupportedFilters::PURCHASES;
     }
 }

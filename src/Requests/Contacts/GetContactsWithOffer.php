@@ -6,6 +6,9 @@ use Saloon\Enums\Method;
 use Saloon\Http\Request;
 use Saloon\PaginationPlugin\Contracts\Paginatable;
 use WooNinja\KajabiSaloon\DataTransferObjects\Enrollments\Enrollment;
+use WooNinja\KajabiSaloon\Requests\Concerns\JsonApiQuery;
+use WooNinja\KajabiSaloon\Requests\Concerns\SupportedFilters;
+use WooNinja\KajabiSaloon\Requests\Contracts\DeclaresSupportedFilters;
 
 /**
  * Get Contacts who have been granted a specific Offer (returns as Enrollments)
@@ -15,8 +18,10 @@ use WooNinja\KajabiSaloon\DataTransferObjects\Enrollments\Enrollment;
  * This is used for finding all enrollments in a specific course (offer).
  * Returns Enrollment DTOs representing users enrolled in the offer.
  */
-class GetContactsWithOffer extends Request implements Paginatable
+class GetContactsWithOffer extends Request implements Paginatable, DeclaresSupportedFilters
 {
+    use JsonApiQuery;
+
     protected Method $method = Method::GET;
 
     public function __construct(
@@ -85,5 +90,10 @@ class GetContactsWithOffer extends Request implements Paginatable
                 $name
             );
         }, $data);
+    }
+
+    public static function supportedFilters(): array
+    {
+        return SupportedFilters::CONTACTS;
     }
 }

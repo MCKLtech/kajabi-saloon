@@ -8,9 +8,14 @@ use Saloon\Enums\Method;
 use Saloon\Http\Request;
 use Saloon\PaginationPlugin\Contracts\Paginatable;
 use WooNinja\KajabiSaloon\DataTransferObjects\CustomProfileFieldDefinitions\CustomProfileFieldDefinition;
+use WooNinja\KajabiSaloon\Requests\Concerns\JsonApiQuery;
+use WooNinja\KajabiSaloon\Requests\Concerns\SupportedFilters;
+use WooNinja\KajabiSaloon\Requests\Contracts\DeclaresSupportedFilters;
 
-class GetCustomFields extends Request implements Paginatable
+class GetCustomFields extends Request implements Paginatable, DeclaresSupportedFilters
 {
+    use JsonApiQuery;
+
     protected Method $method = Method::GET;
 
     public function __construct(
@@ -60,5 +65,10 @@ class GetCustomFields extends Request implements Paginatable
         return array_map(function ($customField) {
             return CustomProfileFieldDefinition::fromKajabiCustomField($customField);
         }, $data);
+    }
+
+    public static function supportedFilters(): array
+    {
+        return SupportedFilters::CUSTOM_FIELDS;
     }
 }

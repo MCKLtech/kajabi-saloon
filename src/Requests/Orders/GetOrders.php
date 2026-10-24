@@ -6,9 +6,14 @@ use Saloon\Enums\Method;
 use Saloon\Http\Request;
 use Saloon\PaginationPlugin\Contracts\Paginatable;
 use WooNinja\KajabiSaloon\DataTransferObjects\Orders\Order;
+use WooNinja\KajabiSaloon\Requests\Concerns\JsonApiQuery;
+use WooNinja\KajabiSaloon\Requests\Concerns\SupportedFilters;
+use WooNinja\KajabiSaloon\Requests\Contracts\DeclaresSupportedFilters;
 
-class GetOrders extends Request implements Paginatable
+class GetOrders extends Request implements Paginatable, DeclaresSupportedFilters
 {
+    use JsonApiQuery;
+
     protected Method $method = Method::GET;
 
     public function __construct(
@@ -56,15 +61,26 @@ class GetOrders extends Request implements Paginatable
             $query['filter[site_id]'] = $this->defaultSiteId;
         }
 
+        // Items and the customer's email/name are only in `included`
+        if (!isset($query['include'])) {
+            $query['include'] = 'order_items,customer';
+        }
+
         return $query;
     }
 
     public function createDtoFromResponse($response): array
     {
-        $data = $response->json('data', []);
-        
-        return array_map(function ($order) {
-            return Order::fromKajabiOrder($order);
-        }, $data);
+        $included = Order::includedMap($response->json('included', []));
+
+        return array_map(
+            fn(array $order) => Order::fromKajabiOrder($order, $included),
+            $response->json('data', [])
+        );
+    }
+
+    public static function supportedFilters(): array
+    {
+        return SupportedFilters::ORDERS;
     }
 }

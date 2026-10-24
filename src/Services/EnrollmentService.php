@@ -2,6 +2,7 @@
 
 namespace WooNinja\KajabiSaloon\Services;
 
+use Carbon\Carbon;
 use Saloon\Http\Request;
 use Saloon\Http\Response;
 use Saloon\PaginationPlugin\Paginator;
@@ -187,6 +188,10 @@ class EnrollmentService extends Resource implements EnrollmentServiceInterface
             throw new \Exception('Failed to grant offer to contact');
         }
 
+        // The one place the grant time is known. (Re-granting an offer the contact
+        // already has also lands here, so this is the latest grant, not the first.)
+        $grantedAt = Carbon::now();
+
         // Fetch the offer details to return as enrollment
         $offerResponse = $this->connector->send(new GetOffer($offerId));
         $offerData = $offerResponse->json('data');
@@ -196,7 +201,8 @@ class EnrollmentService extends Resource implements EnrollmentServiceInterface
             $offerData,
             $contact->id,
             $contact->email,
-            $contact->first_name . ' ' . $contact->last_name
+            $contact->first_name . ' ' . $contact->last_name,
+            grantedAt: $grantedAt
         );
     }
 

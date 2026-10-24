@@ -6,8 +6,11 @@ use Saloon\Exceptions\Request\FatalRequestException;
 use Saloon\Exceptions\Request\RequestException;
 use Saloon\PaginationPlugin\Paginator;
 use WooNinja\KajabiSaloon\DataTransferObjects\Courses\Course;
+use WooNinja\KajabiSaloon\DataTransferObjects\Products\Product;
 use WooNinja\KajabiSaloon\Requests\Offers\GetOffer;
 use WooNinja\KajabiSaloon\Requests\Offers\GetOffers;
+use WooNinja\KajabiSaloon\Requests\Products\GetProduct;
+use WooNinja\KajabiSaloon\Requests\Products\GetProducts;
 use WooNinja\LMSContracts\Contracts\Services\ProductServiceInterface;
 use WooNinja\LMSContracts\Contracts\DTOs\Products\ProductInterface;
 
@@ -99,5 +102,53 @@ class ProductService extends Resource implements ProductServiceInterface
     public function related(int $product_id): Paginator
     {
         throw new \BadMethodCallException('Related products are not supported in Kajabi');
+    }
+
+    /**
+     * Kajabi PRODUCTS themselves (GET /v1/products), not the offers products() returns
+     *
+     * @param array $filters name_cont, description_cont, exclude_product_types, limit, max_pages
+     *                       (filter[status_eq] is in the spec but ignored by the API)
+     */
+    public function kajabiProducts(array $filters = []): Paginator
+    {
+        return $this->connector
+            ->paginate(new GetProducts($filters, $this->getDefaultSiteId()));
+    }
+
+    /**
+     * One Kajabi product (GET /v1/products/{id})
+     *
+     * @throws FatalRequestException
+     * @throws RequestException
+     */
+    public function kajabiProduct(int $product_id): Product
+    {
+        return $this->connector
+            ->send(new GetProduct($product_id))
+            ->dtoOrFail();
+    }
+
+    /**
+     * The products that have modules, lessons and course progress - the ones
+     * worth polling. Cohort courses are excluded (they have no progress API).
+     *
+     * @return Product[]
+     */
+    public function courseProducts(array $filters = []): array
+    {
+        $products = $this->kajabiProducts(
+            ['exclude_product_types' => GetProducts::COHORT_COURSE, 'limit' => 100] + $filters
+        );
+
+        $courses = [];
+
+        foreach ($products->items() as $product) {
+            if ($product->isCourse()) {
+                $courses[] = $product;
+            }
+        }
+
+        return $courses;
     }
 }

@@ -15,8 +15,7 @@ class KajabiAuthenticator implements Authenticator
      */
     public const EXPIRY_MARGIN_SECONDS = 60;
 
-    private ?string $accessToken = null;
-    private ?int $expiresAt = null; // Unix time; null = no known expiry
+    private ?AccessToken $token = null;
     public $connector = null;
     private bool $isAuthenticating = false; // Prevent infinite loop
 
@@ -32,14 +31,17 @@ class KajabiAuthenticator implements Authenticator
             return;
         }
 
-        if (!$this->accessToken || $this->isTokenExpired()) {
-            $this->authenticate();
+        if (!$this->token || $this->isTokenExpired()) {
+            $this->refresh();
         }
 
-        $pendingRequest->headers()->add('Authorization', 'Bearer ' . $this->accessToken);
+        $pendingRequest->headers()->add('Authorization', 'Bearer ' . $this->token->token);
     }
 
-    private function authenticate(): void
+    /**
+     * Exchange the client credentials for a new token, whatever the state of the current one
+     */
+    public function refresh(): AccessToken
     {
         if (!$this->connector) {
             throw new \Exception('Connector is required for authentication');
@@ -56,11 +58,7 @@ class KajabiAuthenticator implements Authenticator
             ));
 
             if ($response->successful()) {
-                $data = $response->json();
-                $this->accessToken = $data['access_token'];
-                $this->expiresAt = isset($data['expires_in'])
-                    ? time() + (int)$data['expires_in'] - self::EXPIRY_MARGIN_SECONDS
-                    : null;
+                $this->token = AccessToken::fromResponse($response->json());
             } else {
                 throw new \Exception('Failed to authenticate: ' . $response->body());
             }
@@ -68,24 +66,49 @@ class KajabiAuthenticator implements Authenticator
             // Always reset the flag
             $this->isAuthenticating = false;
         }
+
+        return $this->token;
     }
 
     public function getAccessToken(): ?string
     {
-        return $this->accessToken;
+        return $this->token?->token;
     }
 
     /**
-     * @param int|null $expiresIn Seconds until the token expires (null = treat as non-expiring)
+     * The current token with its expiry and refresh token, or null before the first exchange
      */
-    public function setAccessToken(string $token, ?int $expiresIn = null): void
+    public function getToken(): ?AccessToken
     {
-        $this->accessToken = $token;
-        $this->expiresAt = $expiresIn !== null ? time() + $expiresIn - self::EXPIRY_MARGIN_SECONDS : null;
+        return $this->token;
     }
 
+    /**
+     * Unix time Kajabi's expiry runs out (no safety margin), or null when unknown
+     */
+    public function getTokenExpiresAt(): ?int
+    {
+        return $this->token?->expiresAt;
+    }
+
+    /**
+     * Restore a cached token
+     *
+     * @param string|AccessToken $token An AccessToken keeps its own expiry; $expiresIn is then ignored
+     * @param int|null $expiresIn Seconds until the token expires (null = treat as non-expiring)
+     */
+    public function setAccessToken(string|AccessToken $token, ?int $expiresIn = null): void
+    {
+        $this->token = $token instanceof AccessToken
+            ? $token
+            : new AccessToken($token, $expiresIn, $expiresIn !== null ? time() + $expiresIn : null);
+    }
+
+    /**
+     * Expired, or within EXPIRY_MARGIN_SECONDS of it
+     */
     public function isTokenExpired(): bool
     {
-        return $this->expiresAt !== null && time() >= $this->expiresAt;
+        return $this->token !== null && $this->token->isExpired(self::EXPIRY_MARGIN_SECONDS);
     }
 }

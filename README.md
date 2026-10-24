@@ -6,10 +6,14 @@ A PHP library for the Kajabi API using Saloon. Drop-in replacement for `mckltech
 
 - ✅ **OAuth2 Authentication** - Automatic token management with Client Credentials flow
 - ✅ **Pagination Support** - Built-in pagination matching Thinkific's interface
-- ✅ **Rate Limiting** - Configurable rate limiting (default: 100 req/min)
+- ✅ **Rate Limiting** - Client-side limit (default: 100 req/min; Kajabi blocks an IP for 10 minutes above ~1000/min), throws by default
 - ✅ **Type Safety** - Full DTOs implementing lms-contracts interfaces
 - ✅ **Global Site ID** - Set once, use everywhere
 - ✅ **Filter Translation** - Automatically translates Thinkific filters to Kajabi format
+- ✅ **Strict Filters** - Optional mode that refuses filters Kajabi would silently ignore
+- ✅ **Course Progress & Member Activity** - Resumable progress sync, typed webhook events, course structure (modules/lessons)
+
+Behaviour below marked *verified live* was checked against the Kajabi API on 2026-10-24, where it differs from or goes beyond `openapi.yaml`.
 
 ## Installation
 
@@ -114,7 +118,22 @@ try {
 
 ### Access Token Caching
 
-For improved performance, you can cache the access token to avoid repeated OAuth requests:
+For improved performance, you can cache the access token to avoid repeated OAuth requests. Kajabi's tokens last **7 days** (`expires_in` 604800) and come with a refresh token.
+
+```php
+// Recommended: fetch the token with its expiry, cache it for exactly that long
+$token = $kajabi->fetchAccessToken();         // WooNinja\KajabiSaloon\Auth\AccessToken
+$token->token;          // the bearer token
+$token->expiresAt;      // Unix time Kajabi's expiry runs out
+$token->refreshToken;
+Cache::put('kajabi_token', $token, $token->secondsRemaining());
+
+// Later: restore it with its expiry; it's refreshed automatically 60s before it runs out
+$kajabi->setAccessToken(Cache::get('kajabi_token'));
+$kajabi->getTokenExpiresAt();
+```
+
+`authenticate()` still returns just the token string:
 
 ```php
 // Method 1: Manually authenticate and cache the token
@@ -230,17 +249,36 @@ $users = $kajabi->users->users(['site_id' => 'different-site-id']);
 
 ### Rate Limiting
 
-```php
-// Customize rate limit (default: 100 requests/minute)
-$connector = $kajabi->connector();
-$connector->setRateLimit(200);
+Kajabi doesn't publish its limit. Measured on 2026-10-24, it is **about 1000 requests per sliding 60 seconds per client IP**, enforced by Cloudflare for every token and site from that IP. Going over returns `429` (`text/plain` body `error code: 1015`, `Retry-After: 600`) and **blocks the IP for 10 minutes** — every endpoint, including the token exchange.
 
-// Use custom rate limit store (e.g., Laravel Cache)
+The SDK keeps a client-side limit (default **100/min**, a deliberately safe tenth of that) and, by default, **throws** `RateLimitReachedException` when it is reached. After a real 429 it also stops sending until `Retry-After` has passed, because requests during a block risk extending it.
+
+```php
+use Saloon\RateLimitPlugin\Exceptions\RateLimitReachedException;
+
+$connector = $kajabi->connector();
+
+// Share one bucket across every process on the server (recommended for queue workers)
 use Saloon\RateLimitPlugin\Stores\LaravelCacheStore;
 use Illuminate\Support\Facades\Cache;
-
 $connector->setRateStore(new LaravelCacheStore(Cache::store()));
+
+// With a shared store you can raise the client-side limit, staying under the IP limit
+$connector->setRateLimit(900);
+
+// Handle the limit by rescheduling, not waiting (e.g. in a Laravel job)
+try {
+    $kajabi->courseProgress->page($productId, [], $cursor);
+} catch (RateLimitReachedException $e) {
+    $this->release($connector->secondsUntilAvailable());
+}
 ```
+
+**Don't sleep on rate limits.** `setSleepOnRateLimit()` exists for one-off scripts, but it is off by default and not recommended: sleeping holds a worker doing nothing, can outlast job and HTTP timeouts, and hides back-pressure from the caller. Throwing and rescheduling is standard practice. Even with sleep enabled, waits longer than `maxRateLimitSleepSeconds` (60s) — such as a 10-minute block after a 429 — still throw.
+
+Every connector shares the bucket `kajabi-api` by default, because the limit is per IP rather than per site or token. Use `setRateLimitName()` only for sites that really send from different IPs.
+
+Send a normal `User-Agent` (the SDK's default is fine): Cloudflare answers `403` (`error code: 1010`) to some library defaults such as `Python-urllib`.
 
 ## Core Usage
 
@@ -381,6 +419,29 @@ foreach ($courses->items() as $course) {
 }
 ```
 
+`$kajabi->courses` lists **offers** (what members are enrolled in), for Thinkific compatibility. `$course->product_ids` lists the products an offer grants; `chapter_ids` is kept for the contract but holds product ids here.
+
+#### Modules and lessons
+
+Kajabi has no lesson or module endpoints; both come from one `GET /v1/courses/{id}?include=modules,lessons` request. Pass a **product id** — a course product's id is also its course id (*verified live*).
+
+```php
+$structure = $kajabi->courses->structure($productId);  // CourseStructure
+
+foreach ($structure->modules as $module) {               // ordered by position
+    echo $module->title . PHP_EOL;
+    foreach ($structure->lessonsInModule($module->id) as $lesson) {
+        echo "  {$lesson->position}. {$lesson->title} ({$lesson->publishing_option})" . PHP_EOL;
+    }
+}
+
+$structure->lessonTitles();   // lesson_id => title, e.g. to label course progress rows
+$kajabi->courses->lessons($productId);   // Lesson[] ordered by module, then position
+$kajabi->courses->modules($productId);   // Module[]
+```
+
+Positions are integers starting at 0. Products that aren't courses (communities, coaching) answer 404; an id not on the account answers 403.
+
 ### Products
 
 ```php
@@ -397,6 +458,22 @@ foreach ($products->items() as $product) {
     echo "Slug: {$product->getSlug()}" . PHP_EOL;
 }
 ```
+
+Like `courses`, `products()` returns **offers** for Thinkific compatibility. For Kajabi's own products (`/v1/products`):
+
+```php
+$kajabi->products->kajabiProducts(['name_cont' => 'Mastery']);   // Paginator of Product
+$kajabi->products->kajabiProduct($productId);
+
+// Only "Course" products have modules, lessons and course progress
+foreach ($kajabi->products->courseProducts() as $product) {
+    echo "{$product->name}: {$product->members_aggregate_count} members" . PHP_EOL;
+}
+$product->product_type_name;   // Course, AccessGroup, CoachingProgram, ...
+$product->isCourse();
+```
+
+`filter[status_eq]` is in the spec but ignored by the API (*verified live*), so filter on status client-side. `exclude_product_types` takes Kajabi's internal type names (e.g. `GetProducts::COHORT_COURSE`).
 
 ### Orders
 
@@ -419,6 +496,8 @@ foreach ($orders->items() as $order) {
 }
 ```
 
+Orders are requested with `include=order_items,customer`: `items` holds each line (offer id, title, amount, purchase id), `product_id`/`product_name` are the first item's offer, and amounts come from Kajabi's cents fields (`amount_cents`, `subtotal_cents`, `sales_tax_cents`, `discount_cents`, `currency`, `order_number`). An order whose customer has since been deleted has an empty `user_email`.
+
 ### Customers
 
 ```php
@@ -430,6 +509,15 @@ $customers = $kajabi->customers->customers(['search' => 'john@example.com']);
 
 // Get specific customer
 $customer = $kajabi->customers->get(123);
+$customer->contact_id;
+```
+
+Course progress and some webhooks identify members by **customer** id; contacts (users) are keyed by **contact** id. `/customers` has no id filter (`filter[id]` and `filter[contact_id]` are silently ignored), so map ids in bulk from the list — a few requests for thousands of members:
+
+```php
+$kajabi->customers->contactIds([$customerId1, $customerId2]);  // [customer_id => contact_id], stops once all are found
+$kajabi->customers->contactIdMap();                            // every customer on the site
+$kajabi->users->customerIds([$contactId]);                     // [contact_id => customer_id]; contacts without a customer are left out
 ```
 
 ### Other Services
@@ -498,6 +586,11 @@ foreach ($kajabi->courseProgress->forCourse($courseId)->items() as $row) {
 
 $row = $kajabi->courseProgress->forCustomer($courseId, $customerId); // null if no progress record
 
+// One page at a time (pages hold at most 100 rows; the cursor survives between processes)
+$page = $kajabi->courseProgress->page($courseId, ['limit' => 100], $cursor); // $cursor null = first page
+foreach ($page->rows as $row) { /* ... */ }
+$cursor = $page->nextCursor; // null on the last page
+
 // Recommended sync: frequent incremental runs plus a nightly full pass
 $sync = $kajabi->courseProgress->sync(); // 5 minute margin by default
 $result = $sync->incremental($courseId, $lastSyncStartedAt, fn($row) => $repo->upsert($row));
@@ -506,12 +599,34 @@ $lastSyncStartedAt = $result->started_at; // persist only after the run succeeds
 $result = $sync->full($courseId, fn($row) => $repo->upsert($row));
 $repo->delete($result->missingFrom($repo->idsForCourse($courseId)));
 
+// With a time budget: park the run and resume it in a later job
+$deadline = time() + 50;
+$result = $checkpoint
+    ? $sync->resume($checkpoint, $upsert, fn() => time() >= $deadline)
+    : $sync->incremental($courseId, $lastSyncStartedAt, $upsert, fn() => time() >= $deadline);
+
+if ($result->isComplete()) {
+    $lastSyncStartedAt = $result->started_at;          // the original run's start, even after resumes
+} else {
+    $store->put('checkpoint', $result->checkpoint()->toArray());  // later: SyncCheckpoint::fromArray(...)
+}
+
 // Real progress on an enrollment (opt-in; extra requests per call)
 $enrollment = $kajabi->enrollments->withProgress($enrollment);
 echo $enrollment->percentage_completed; // 0.0 - 1.0
 ```
 
-A 423 response throws `WooNinja\KajabiSaloon\Exceptions\FeatureNotEnabledException` (a `RequestException`).
+Errors (all extend `RequestException`, in `WooNinja\KajabiSaloon\Exceptions`):
+
+| Status | Exception | Meaning |
+|---|---|---|
+| 423 | `FeatureNotEnabledException` | Course progress isn't available on this account |
+| 403 | `CourseProgressForbiddenException` | The API key lacks course progress access |
+| 404 | `CourseProgressNotFoundException` | Not a "Course" product (community, coaching, podcast, cohort) or not on the account — permanent for that id, stop polling it |
+
+`missingFrom()` refuses a full pass that was split across resumed runs (its row ids are partial); stamp rows with `started_at` in the upsert and delete the course's rows stamped earlier instead.
+
+`percentage_completed` on enrollments from offers or purchases is a placeholder: check `$enrollment->progress_known`, which is `true` only once `withProgress()` has applied real course progress. Offer enrollments also leave `started_at`/`activated_at`/`created_at` null unless the grant time is known (`enrollments->create()` records it).
 
 ## Complete Workflow Examples
 
@@ -631,12 +746,14 @@ foreach ($users->items() as $user) {
 }
 
 // Get pagination metadata (after making at least one API call)
-$totalResults = $users->getTotalAPIResults();  // Total items from API
-$totalPages = $users->getTotalAPIPages();      // Total pages from API
+$totalResults = $users->getTotalAPIResults();  // meta.total
+$totalPages = $users->getTotalAPIPages();      // from meta.total, else links.last
 
 // Collect all items into array
 $allUsers = $users->collect();
 ```
+
+Only `/contacts` and `/customers` send a total (`meta.total`); other lists send none, so `getTotalAPIResults()` is 0 there — check `hasTotalAPIResults()`. `getTotalAPIPages()` falls back to the last page link. Most lists accept large pages (`page[size]=1000` works on `/customers`); `/course_progress` caps at 100.
 
 ## API Mapping
 
@@ -644,16 +761,16 @@ This library provides a **drop-in replacement** for Thinkific by mapping Kajabi 
 
 | Thinkific Service | Kajabi Endpoint | Notes | Compatible Methods |
 |------------------|-----------------|-------|---------------------|
-| Users | `/contacts` | Direct mapping | `get()`, `users()`, `find()`, `findByEmail()`, `create()`, `update()`, `delete()` |
+| Users | `/contacts` | Direct mapping | `get()`, `users()`, `find()`, `findByEmail()`, `create()`, `update()`, `delete()`, `customerIds()` |
 | Enrollments | `/contacts/{id}/relationships/offers` | Offer grants to Contacts | `get()`, `enrollments()`, `create()`, `update()`, `expire()`, `enrollmentsForUser()`, `enrollmentsForCourse()`, `enrollmentsForUserInCourse()`, `isUserEnrolledInCourse()` |
-| Courses | `/products` | Products = Courses | `get()`, `courses()`, `product()`, `chapters()` |
-| Products | `/products` | Direct mapping | `get()`, `products()`, `courses()`, `related()` |
+| Courses | `/offers`, `/courses/{id}` | Offers = Courses; structure from the course | `get()`, `courses()`, `product()`, `structure()`, `lessons()`, `modules()` |
+| Products | `/offers`, `/products` | Offers = Products; Kajabi products separately | `get()`, `products()`, `courses()`, `kajabiProducts()`, `kajabiProduct()`, `courseProducts()` |
 | Orders | `/orders` | Purchase history | `get()`, `orders()` |
-| Customers | `/customers` | Auto-created with offers | `get()`, `customers()` |
+| Customers | `/customers` | Auto-created with offers | `get()`, `customers()`, `contactIds()`, `contactIdMap()` |
 | Offers | `/offers` | Grant access to products | `get()`, `offers()` |
 | Sites | `/sites` | Site information | `get()`, `sites()` |
 | Webhooks | `/hooks` | Webhook management | `get()`, `webhooks()`, `create()`, `delete()`, `replace()`, `sample()`, `parse()` |
-| Course Progress | `/course_progress` | Per-member course progress | `forCourse()`, `forCustomer()`, `updatedSince()`, `sync()` |
+| Course Progress | `/course_progress` | Per-member course progress | `forCourse()`, `forCustomer()`, `updatedSince()`, `page()`, `sync()` |
 
 ## Data Transformation
 
@@ -668,9 +785,9 @@ The library automatically transforms Kajabi's JSON:API format to match Thinkific
 ### Enrollment (Purchase) Transformation
 - **Kajabi Purchase** → Thinkific Enrollment DTO
 - **Customer relationship** → `user_id` extracted
-- **Product relationship** → `course_id` extracted
-- **Status mapping** → `active`, `completed`, `expired`, `cancelled`
-- **Default progress** → `percentage_completed` = 0.0 (use `$kajabi->enrollments->withProgress()` for real progress)
+- **Offer relationship** → `course_id` (the offer, matching the Thinkific "course")
+- **Status** → from `deactivated_at`: `expired` only once it has passed (a future date is a scheduled end, still `active`); `expiry_date` = `deactivated_at`
+- **Default progress** → `percentage_completed` = 0.0 with `progress_known` false (use `$kajabi->enrollments->withProgress()` for real progress)
 
 ### Course Transformation
 - **Product relationship** → `product_id` extracted
@@ -685,7 +802,7 @@ Thinkific-style filters are automatically translated to Kajabi format:
 |------------------|---------------|---------|
 | `query[email]` | `filter[search]` | Email search |
 | `query[user_id]` | `filter[customer_id]` | User filter |
-| `query[course_id]` | `filter[product_id]` | Course filter |
+| `query[course_id]` | — | Dropped for purchases: Kajabi has no such filter |
 | `limit` | `page[size]` | Page size |
 | `page` | `page[number]` | Page number |
 | `site_id` | `filter[site_id]` | Site filter |
@@ -696,11 +813,38 @@ Thinkific-style filters are automatically translated to Kajabi format:
 // This works exactly like Thinkific:
 $enrollments = $kajabi->enrollments->enrollments([
     'query[user_id]' => 123,
-    'query[course_id]' => 456,
     'limit' => 50
 ]);
 // Automatically translated to Kajabi format behind the scenes
 ```
+
+### Unsupported filters are silently ignored
+
+Kajabi answers a filter it doesn't support — a typo, `filter[id]`, `filter[contact_id]` on `/customers`, even `filter[status_eq]` on `/products` which the spec documents — with the **unfiltered** list and a 200 (*verified live*). Code relying on the filter then processes every record.
+
+Strict mode makes such requests throw before they're sent. Turn it on in development and tests:
+
+```php
+$kajabi->connector()->setStrictFilters();
+
+$kajabi->customers->customers(['filter[id]' => '1,2']);
+// UnsupportedFilterException: WooNinja\KajabiSaloon\Requests\Customers\GetCustomers: Kajabi ignores id,
+//   so the request would return unfiltered results. ...
+```
+
+Each list request declares what Kajabi honours (`GetCustomers::supportedFilters()`, from `openapi.yaml` minus filters found ignored live). Requests sent directly through the connector also have JSON:API helpers:
+
+```php
+use WooNinja\KajabiSaloon\Requests\Customers\GetCustomers;
+use WooNinja\KajabiSaloon\Requests\Contacts\GetContact;
+
+$kajabi->connector()->send(
+    (new GetCustomers())->filter('created_in_last', 7)->fields('customers', 'name', 'contact')->sort('-created_at')->pageSize(500)
+);
+$kajabi->connector()->send((new GetContact($id))->include('customer', 'tags'));
+```
+
+Sparse `fields[...]` also drops relationships that aren't named, so list a relationship (e.g. `contact`) to keep it.
 
 ## Error Handling
 
@@ -780,13 +924,13 @@ OAuth2 Client Credentials flow with automatic token management
 
 ## Requirements
 
-- PHP 8.1 or higher
+- PHP 8.2 or higher
 - Composer
 - Kajabi API credentials (Client ID, Client Secret, Site ID)
 
 ## Dependencies
 
-- `saloonphp/saloon` ^3.0 - HTTP client
+- `saloonphp/saloon` ^4.0 - HTTP client
 - `saloonphp/pagination-plugin` ^2.2 - Pagination support
 - `saloonphp/rate-limit-plugin` ^2.0 - Rate limiting
 - `nesbot/carbon` - Date/time handling

@@ -33,8 +33,21 @@ class Product implements ProductInterface
         // Additional Kajabi-specific fields
         public ?string $url = null,
         public ?string $updated_at = null,
+        public ?string $product_type_name = null,   // Course, AccessGroup, CoachingProgram, Podcast, ...
+        public ?int    $product_type_id = null,     // for Course products this equals the product (and course) id
+        public ?int    $members_aggregate_count = null,
+        public ?string $publish_status = null,
     )
     {
+    }
+
+    /**
+     * Only "Course" products have modules, lessons and course progress; the
+     * others answer 404 on /v1/courses/{id} and /v1/course_progress.
+     */
+    public function isCourse(): bool
+    {
+        return $this->product_type_name === 'Course';
     }
 
     /**
@@ -113,12 +126,18 @@ class Product implements ProductInterface
             collection_ids: [], // Kajabi doesn't use collections the same way
             related_product_ids: $relatedProductIds,
             description: $product['attributes']['description'] ?? null,
-            card_image_url: $product['attributes']['image_url'] ?? null,
+            card_image_url: $product['attributes']['image_url'] ?? $product['attributes']['thumbnail_url'] ?? null,
             slug: $product['attributes']['slug'] ?? '',
             product_prices: $productPrices,
             // Kajabi-specific fields
             url: $product['attributes']['url'] ?? null,
             updated_at: $product['attributes']['updated_at'] ?? null,
+            product_type_name: $product['attributes']['product_type_name'] ?? null,
+            product_type_id: isset($product['attributes']['product_type_id']) ? (int) $product['attributes']['product_type_id'] : null,
+            members_aggregate_count: isset($product['attributes']['members_aggregate_count'])
+                ? (int) $product['attributes']['members_aggregate_count']
+                : null,
+            publish_status: $product['attributes']['publish_status'] ?? null,
         );
     }
 

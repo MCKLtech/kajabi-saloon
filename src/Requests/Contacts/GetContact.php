@@ -5,9 +5,12 @@ namespace WooNinja\KajabiSaloon\Requests\Contacts;
 use Saloon\Enums\Method;
 use Saloon\Http\Request;
 use WooNinja\KajabiSaloon\DataTransferObjects\Users\User;
+use WooNinja\KajabiSaloon\Requests\Concerns\JsonApiQuery;
 
 class GetContact extends Request
 {
+    use JsonApiQuery;
+
     protected Method $method = Method::GET;
 
     public function __construct(

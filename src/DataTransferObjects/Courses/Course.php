@@ -4,8 +4,19 @@ namespace WooNinja\KajabiSaloon\DataTransferObjects\Courses;
 
 use WooNinja\LMSContracts\Contracts\DTOs\Courses\CourseInterface;
 
+/**
+ * $chapter_ids is kept for the CourseInterface contract, but holds different
+ * things by source: product ids (fromKajabiOffer), module ids - or lesson ids
+ * when a course has no modules - (fromKajabiCourse). Read $product_ids,
+ * $module_ids and $lesson_ids instead; each always means one thing.
+ */
 final class Course implements CourseInterface
 {
+    /**
+     * @param int[] $product_ids Products this offer grants, or the course's product (its own id)
+     * @param int[] $module_ids  Module ids, from GET /v1/courses/{id}; empty for offers
+     * @param int[] $lesson_ids  Lesson ids, from GET /v1/courses/{id}; empty for offers
+     */
     public function __construct(
         public int         $id,
         public string      $name,
@@ -30,6 +41,9 @@ final class Course implements CourseInterface
         public ?string     $thumbnail_url = null,
         public ?string     $created_at = null,
         public ?string     $updated_at = null,
+        public array       $product_ids = [],
+        public array       $module_ids = [],
+        public array       $lesson_ids = [],
     )
     {
     }
@@ -82,6 +96,7 @@ final class Course implements CourseInterface
             thumbnail_url: null,
             created_at: $offer['attributes']['created_at'] ?? null,
             updated_at: $offer['attributes']['updated_at'] ?? null,
+            product_ids: $productIds,
         );
     }
 
@@ -143,19 +158,21 @@ final class Course implements CourseInterface
             }
         }
         
-        // Extract chapter/module IDs from relationships
-        $chapterIds = [];
-        if (isset($course['relationships']['modules']['data'])) {
-            $modules = $course['relationships']['modules']['data'];
-            if (is_array($modules)) {
-                $chapterIds = array_map(fn($module) => (int) $module['id'], $modules);
-            }
-        } elseif (isset($course['relationships']['lessons']['data'])) {
-            // Some Kajabi courses might have lessons directly
-            $lessons = $course['relationships']['lessons']['data'];
-            if (is_array($lessons)) {
-                $chapterIds = array_map(fn($lesson) => (int) $lesson['id'], $lessons);
-            }
+        $moduleIds = self::relationshipIds($course, 'modules');
+        $lessonIds = self::relationshipIds($course, 'lessons');
+
+        // chapter_ids: modules, or lessons when a course has no modules
+        $chapterIds = isset($course['relationships']['modules']['data']) ? $moduleIds : $lessonIds;
+
+        // GET /v1/courses/{id} sends no product relationship, but a course's id is
+        // its product's id (verified live), so product_ids falls back to it.
+        // product_id stays null then, as before.
+        $productIds = array_values(array_unique(array_merge(
+            $productId !== null ? [$productId] : [],
+            self::relationshipIds($course, 'products')
+        )));
+        if ($productIds === []) {
+            $productIds = [(int) $course['id']];
         }
         
         return new self(
@@ -182,7 +199,29 @@ final class Course implements CourseInterface
             thumbnail_url: $course['attributes']['thumbnail_url'] ?? null,
             created_at: $course['attributes']['created_at'] ?? null,
             updated_at: $course['attributes']['updated_at'] ?? null,
+            product_ids: $productIds,
+            module_ids: $moduleIds,
+            lesson_ids: $lessonIds,
         );
     }
 
+    /**
+     * @return int[]
+     */
+    private static function relationshipIds(array $resource, string $name): array
+    {
+        $data = $resource['relationships'][$name]['data'] ?? null;
+
+        if (!is_array($data)) {
+            return [];
+        }
+
+        // To-one: { "data": { "id": "303" } }
+        if (isset($data['id'])) {
+            return [(int) $data['id']];
+        }
+
+        // To-many: { "data": [ { "id": "303" }, ... ] }
+        return array_map(fn($item) => (int) $item['id'], $data);
+    }
 }

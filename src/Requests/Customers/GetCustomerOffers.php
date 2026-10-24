@@ -32,7 +32,9 @@ class GetCustomerOffers extends Request
     {
         $query = [];
 
-        // Support include parameter to get full offer details
+        // Passed through, but the live API ignores include on relationship endpoints
+        // (only resource identifiers come back). For offer details use
+        // GET /customers/{id}?include=offers instead.
         if (isset($this->filters['include'])) {
             $query['include'] = $this->filters['include'];
         }

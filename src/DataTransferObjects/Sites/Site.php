@@ -16,11 +16,15 @@ final class Site
     {
     }
 
+    /**
+     * The live API sends title, subdomain, created_at and updated_at only:
+     * $name comes from title, $domain is '' and $description is null.
+     */
     public static function fromKajabiSite(array $site): self
     {
         return new self(
             id: (int) $site['id'],
-            name: $site['attributes']['name'] ?? '',
+            name: $site['attributes']['title'] ?? $site['attributes']['name'] ?? '',
             domain: $site['attributes']['domain'] ?? '',
             subdomain: $site['attributes']['subdomain'] ?? null,
             description: $site['attributes']['description'] ?? null,
