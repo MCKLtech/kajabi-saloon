@@ -68,6 +68,11 @@ class GetCourseProgress extends Request implements Paginatable, DeclaresSupporte
                 case 'page[after]':
                     $query['page[after]'] = $value;
                     break;
+                // Read (and stripped) by KajabiConnector::paginate(). page/start_page
+                // stay dropped: they'd become page[number], which is a 400 here.
+                case 'max_pages':
+                    $query[$key] = $value;
+                    break;
                 // page[number] returns 400 and sort is ignored; paging controls are the paginator's
                 default:
                     break;

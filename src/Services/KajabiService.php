@@ -7,6 +7,7 @@ use WooNinja\KajabiSaloon\Auth\AccessToken;
 use WooNinja\KajabiSaloon\Auth\KajabiAuthenticator;
 use WooNinja\KajabiSaloon\Connectors\KajabiConnector;
 use WooNinja\KajabiSaloon\Interfaces\Kajabi;
+use WooNinja\KajabiSaloon\Requests\Me\GetMe;
 use WooNinja\LMSContracts\Contracts\LMSServiceInterface;
 use WooNinja\LMSContracts\Contracts\Services\UserServiceInterface;
 use WooNinja\LMSContracts\Contracts\Services\CourseServiceInterface;
@@ -291,17 +292,20 @@ final class KajabiService implements Kajabi, LMSServiceInterface
     }
 
     /**
-     * Check if service is properly configured and connected
+     * Check the credentials work and Kajabi answers: exchanges a token if needed,
+     * then makes one read-only request (GET /v1/me)
+     *
+     * False on any failure - bad credentials, network, timeout, rate limit or a
+     * Kajabi error. Costs a request (two without a cached token), so don't call it
+     * before every API call.
      *
      * @return bool
      */
     public function isConnected(): bool
     {
         try {
-            // Test connection with a lightweight API call
-            $this->connector();
-            return true;
-        } catch (\Exception $e) {
+            return $this->connector()->send(new GetMe())->successful();
+        } catch (\Throwable) {
             return false;
         }
     }

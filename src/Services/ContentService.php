@@ -20,7 +20,7 @@ class ContentService extends Resource
      */
     public function get(int $content_id)
     {
-        throw new \Exception('Contents are not directly supported in Kajabi. Kajabi uses Lessons. Check the Kajabi API documentation for lesson endpoints.');
+        throw new \Exception('Contents are not directly supported in Kajabi, which has lessons but no lesson endpoints. Use $kajabi->courses->lessons($productId) to read the lessons of a course.');
     }
 
     /**
@@ -32,6 +32,6 @@ class ContentService extends Resource
      */
     public function contents(array $filters = []): Paginator
     {
-        throw new \Exception('Contents are not directly supported in Kajabi. Kajabi uses Lessons. Check the Kajabi API documentation for lesson endpoints.');
+        throw new \Exception('Contents are not directly supported in Kajabi, which has lessons but no lesson endpoints. Use $kajabi->courses->lessons($productId) to read the lessons of a course.');
     }
 }

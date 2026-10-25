@@ -21,7 +21,7 @@ class ChapterService extends Resource
      */
     public function get(int $chapter_id)
     {
-        throw new \Exception('Chapters are not directly supported in Kajabi. Kajabi uses Modules and Lessons. Check the Kajabi API documentation for module/lesson endpoints.');
+        throw new \Exception('Chapters are not directly supported in Kajabi, which has modules and lessons but no endpoints for them. Use $kajabi->courses->structure($productId) (or ->modules() / ->lessons()) to read the modules and lessons of a course.');
     }
 
     /**
@@ -33,6 +33,6 @@ class ChapterService extends Resource
      */
     public function content(int $chapter_id): Paginator
     {
-        throw new \Exception('Chapters are not directly supported in Kajabi. Kajabi uses Modules and Lessons. Check the Kajabi API documentation for module/lesson endpoints.');
+        throw new \Exception('Chapters are not directly supported in Kajabi, which has modules and lessons but no endpoints for them. Use $kajabi->courses->structure($productId) (or ->modules() / ->lessons()) to read the modules and lessons of a course.');
     }
 }

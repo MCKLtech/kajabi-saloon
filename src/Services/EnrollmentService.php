@@ -136,12 +136,15 @@ class EnrollmentService extends Resource implements EnrollmentServiceInterface
      */
     private function resolveCustomerIdByEmail(string $email): ?int
     {
-        $customers = $this->connector->paginate(
-            new GetCustomers(['search' => $email, 'limit' => 1], $this->getDefaultSiteId())
-        );
+        // filter[search] matches partially, so take the exact (case-insensitive) address only
+        $customers = $this->connector
+            ->send(new GetCustomers(['search' => $email, 'limit' => UserService::EMAIL_SEARCH_PAGE_SIZE], $this->getDefaultSiteId()))
+            ->dtoOrFail();
 
-        foreach ($customers->items() as $customer) {
-            return $customer->id;
+        foreach ($customers as $customer) {
+            if (strcasecmp($customer->email, $email) === 0) {
+                return $customer->id;
+            }
         }
 
         return null;
@@ -341,7 +344,7 @@ class EnrollmentService extends Resource implements EnrollmentServiceInterface
      * Uses Kajabi's Contacts API with filter[has_offer_id] to find all contacts
      * who have been granted this offer. Returns them as Enrollment DTOs.
      *
-     * API: GET /v1/contacts?filter[has_offer_id]={course_id}
+     * API: GET /v1/offers/{course_id} (for the title), then GET /v1/contacts?filter[has_offer_id]={course_id}
      *
      * @param int $course_id Offer ID
      * @param array $filters
@@ -349,11 +352,15 @@ class EnrollmentService extends Resource implements EnrollmentServiceInterface
      */
     public function enrollmentsForCourse(int $course_id, array $filters = []): Paginator
     {
+        // One request for the offer, so every enrollment carries its title
+        $offer = $this->connector->send(new GetOffer($course_id))->json('data');
+
         return $this->connector->paginate(
             new GetContactsWithOffer(
                 $course_id,
                 $filters,
-                $this->getDefaultSiteId()
+                $this->getDefaultSiteId(),
+                $offer
             )
         );
     }
@@ -361,7 +368,7 @@ class EnrollmentService extends Resource implements EnrollmentServiceInterface
     /**
      * Find Enrollments for a given User (Contact)
      *
-     * Uses GET /v1/contacts/{contact_id}/relationships/offers
+     * Uses GET /v1/contacts/{contact_id}?include=offers (offers with titles, one request)
      *
      * @param int|string $user_id_or_email Contact ID or email
      * @param array $filters
@@ -369,28 +376,12 @@ class EnrollmentService extends Resource implements EnrollmentServiceInterface
      */
     public function enrollmentsForUser(int|string $user_id_or_email, array $filters = []): Paginator
     {
-        // Get contact ID
-        $contactId = $user_id_or_email;
-
-        $userService = new UserService($this->kajabi);
-
-        if(is_numeric($contactId)) {
-            $contact = $userService->get($contactId);
-        }
-        else {
-            $contact = $userService->findByEmail($user_id_or_email);
-        }
+        $contact = $this->resolveContact($user_id_or_email);
 
         if ($contact === null) {
-            // Return empty paginator
-            return $this->enrollments([
-                'filter[customer_id]' => 0,
-                'filter[created_at_gte]' => '2999-12-31T23:59:59Z',
-                'page[size]' => 1
-            ]);
+            return $this->noEnrollments();
         }
 
-        // Use the Contact → Offers relationship endpoint
         return $this->connector->paginate(
             new GetContactOffers(
                 $contact,
@@ -412,8 +403,16 @@ class EnrollmentService extends Resource implements EnrollmentServiceInterface
      */
     public function enrollmentsForUserInCourse(int|string $user_id_or_email, int $course_id, array $filters = []): Paginator
     {
-        // Get all enrollments for contact (cannot filter by offer_id at API level)
-        return $this->enrollmentsForUser($user_id_or_email, $filters);
+        $contact = $this->resolveContact($user_id_or_email);
+
+        if ($contact === null) {
+            return $this->noEnrollments();
+        }
+
+        // Kajabi can't filter a contact's offers, so GetContactOffers filters client-side
+        return $this->connector->paginate(
+            new GetContactOffers($contact, $filters, $this->getDefaultSiteId(), $course_id)
+        );
     }
 
     /**
@@ -504,6 +503,14 @@ class EnrollmentService extends Resource implements EnrollmentServiceInterface
         return $enrollment->withCourseProgress(
             $this->progress($enrollment->user_id, $enrollment->course_id)
         );
+    }
+
+    /**
+     * A paginator with no items, for an unknown contact: no customer has id 0 (verified live)
+     */
+    private function noEnrollments(): Paginator
+    {
+        return $this->enrollments(['user_id' => 0, 'limit' => 1]);
     }
 
     private function resolveContact(int|string $user_id_or_email): ?UserInterface

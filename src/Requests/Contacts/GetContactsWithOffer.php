@@ -24,10 +24,15 @@ class GetContactsWithOffer extends Request implements Paginatable, DeclaresSuppo
 
     protected Method $method = Method::GET;
 
+    /**
+     * @param array|null $offer The offer resource (data), so enrollments carry its title;
+     *                          without it they're labelled "Offer {id}"
+     */
     public function __construct(
         private int $offerId,
         private array $filters = [],
-        private ?string $defaultSiteId = null
+        private ?string $defaultSiteId = null,
+        private ?array $offer = null,
     ) {}
 
     public function resolveEndpoint(): string
@@ -66,7 +71,7 @@ class GetContactsWithOffer extends Request implements Paginatable, DeclaresSuppo
 
         // We already know the offer ID from the filter we applied
         // Create minimal offer data for the Enrollment DTO
-        $offerData = [
+        $offerData = $this->offer ?? [
             'id' => (string) $this->offerId,
             'type' => 'offers',
             'attributes' => [

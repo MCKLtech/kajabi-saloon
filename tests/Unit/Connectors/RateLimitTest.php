@@ -191,4 +191,21 @@ class RateLimitTest extends TestCase
 
         MemoryStore::clear();
     }
+
+    public function test_requests_have_timeouts(): void
+    {
+        $mockClient = new MockClient([self::ok(), self::ok()]);
+        $connector = $this->connector($mockClient, 100);
+
+        $connector->send(new GetContact(1));
+        $config = $mockClient->getLastPendingRequest()->config()->all();
+        $this->assertSame(10.0, (float) $config['connect_timeout']);
+        $this->assertSame(60.0, (float) $config['timeout']);
+
+        $connector->setTimeouts(5, 120);
+        $connector->send(new GetContact(1));
+        $config = $mockClient->getLastPendingRequest()->config()->all();
+        $this->assertSame(5.0, (float) $config['connect_timeout']);
+        $this->assertSame(120.0, (float) $config['timeout']);
+    }
 }

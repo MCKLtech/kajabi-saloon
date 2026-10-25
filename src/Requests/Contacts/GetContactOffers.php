@@ -19,17 +19,26 @@ class GetContactOffers extends Request implements Paginatable
 {
     protected Method $method = Method::GET;
 
+    /**
+     * @param int|null $offerId Only this offer (filtered client-side: Kajabi can't filter a contact's offers)
+     */
     public function __construct(
         private UserInterface $contact,
         private array         $filters = [],
-        private ?string       $defaultSiteId = null
+        private ?string       $defaultSiteId = null,
+        private ?int          $offerId = null,
     )
     {
     }
 
+    /**
+     * GET /contacts/{id}?include=offers rather than /relationships/offers: the
+     * relationship endpoint returns bare identifiers (no titles), the include
+     * returns the same offers with their attributes (verified live), in one request.
+     */
     public function resolveEndpoint(): string
     {
-        return "/contacts/{$this->contact->id}/relationships/offers";
+        return "/contacts/{$this->contact->id}";
     }
 
     protected function defaultQuery(): array
@@ -65,23 +74,38 @@ class GetContactOffers extends Request implements Paginatable
             $query['filter[site_id]'] = $this->defaultSiteId;
         }
 
+        $query['include'] = 'offers';
+
         return $query;
     }
 
     public function createDtoFromResponse($response): array
     {
-        $data = $response->json('data', []);
+        $included = [];
+        foreach ($response->json('included', []) as $resource) {
+            if (($resource['type'] ?? null) === 'offers') {
+                $included[$resource['id']] = $resource;
+            }
+        }
 
-        // Transform offers to enrollments
-        // Note: We don't have contact details here, so we set basic info
-        return array_map(function ($offer) {
-            return Enrollment::fromKajabiOffer(
-                $offer,
+        $enrollments = [];
+
+        // The contact's offers in Kajabi's order; an identifier without an included
+        // resource still becomes an enrollment (just without a title)
+        foreach ($response->json('data.relationships.offers.data', []) as $identifier) {
+            if ($this->offerId !== null && (int) $identifier['id'] !== $this->offerId) {
+                continue;
+            }
+
+            $enrollments[] = Enrollment::fromKajabiOffer(
+                $included[$identifier['id']] ?? $identifier,
                 $this->contact->id,
-                '', // email not available in this response
-                '',  // name not available in this response
+                '', // filled from $this->contact
+                '',
                 $this->contact
             );
-        }, $data);
+        }
+
+        return $enrollments;
     }
 }

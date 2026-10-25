@@ -20,6 +20,11 @@ use WooNinja\LMSContracts\Contracts\DTOs\Users\UpdateUserInterface;
 class UserService extends Resource implements UserServiceInterface
 {
     /**
+     * Search hits checked for an exact email match
+     */
+    public const EMAIL_SEARCH_PAGE_SIZE = 25;
+
+    /**
      * Get a User by ID (maps to Kajabi Contact)
      *
      * @param int $user_id
@@ -111,8 +116,15 @@ class UserService extends Resource implements UserServiceInterface
         if (is_numeric($user_id_or_email)) {
             try {
                 return $this->get($user_id_or_email);
-            } catch (\Exception $e) {
-                return null;
+            } catch (RequestException $e) {
+                // "No such contact" means null: Kajabi answers 403 for an id that isn't on
+                // the account (verified live) and 404 otherwise. Rate limits and server
+                // errors propagate.
+                if (in_array($e->getResponse()->status(), [403, 404], true)) {
+                    return null;
+                }
+
+                throw $e;
             }
         }
 
@@ -127,9 +139,11 @@ class UserService extends Resource implements UserServiceInterface
      */
     public function findByEmail(string $email): ?UserInterface
     {
+        // filter[search] matches partially (john@x.com also finds bigjohn@x.com), so
+        // look through several hits for the exact address rather than trusting the first
         $response = $this->connector->send(new GetContacts([
             'filter[search]' => $email,
-            'page[size]' => 1,
+            'page[size]' => self::EMAIL_SEARCH_PAGE_SIZE,
         ], $this->getDefaultSiteId()));
 
         $users = $response->dto();

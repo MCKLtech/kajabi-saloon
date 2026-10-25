@@ -36,6 +36,6 @@ class OAuthService extends Resource
      */
     public function token()
     {
-        throw new \Exception('Token retrieval is handled automatically by KajabiAuthenticator. You do not need to call this method directly.');
+        throw new \Exception('Tokens are fetched automatically. To get one with its expiry (e.g. to cache it), use $kajabi->fetchAccessToken().');
     }
 }

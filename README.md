@@ -116,6 +116,14 @@ try {
 }
 ```
 
+To check credentials up front (e.g. when a tenant saves their keys), `isConnected()` exchanges a token and makes one read-only request (`GET /v1/me`); it returns `false` on any failure rather than throwing:
+
+```php
+if (!$kajabi->isConnected()) {
+    // bad credentials, Kajabi unreachable, or rate limited
+}
+```
+
 ### Access Token Caching
 
 For improved performance, you can cache the access token to avoid repeated OAuth requests. Kajabi's tokens last **7 days** (`expires_in` 604800) and come with a refresh token.
@@ -277,6 +285,14 @@ try {
 **Don't sleep on rate limits.** `setSleepOnRateLimit()` exists for one-off scripts, but it is off by default and not recommended: sleeping holds a worker doing nothing, can outlast job and HTTP timeouts, and hides back-pressure from the caller. Throwing and rescheduling is standard practice. Even with sleep enabled, waits longer than `maxRateLimitSleepSeconds` (60s) — such as a 10-minute block after a 429 — still throw.
 
 Every connector shares the bucket `kajabi-api` by default, because the limit is per IP rather than per site or token. Use `setRateLimitName()` only for sites that really send from different IPs.
+
+### Timeouts
+
+Requests time out after **10s to connect and 60s overall** (a stalled response otherwise holds a worker indefinitely). A timeout throws `Saloon\Exceptions\Request\FatalRequestException`.
+
+```php
+$kajabi->connector()->setTimeouts(connectSeconds: 10, requestSeconds: 120);
+```
 
 Send a normal `User-Agent` (the SDK's default is fine): Cloudflare answers `403` (`error code: 1010`) to some library defaults such as `Python-urllib`.
 

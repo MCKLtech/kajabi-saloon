@@ -30,11 +30,12 @@ class UpdateContact extends Request implements HasBody
         // Build the full name from first_name and last_name
         $name = trim($this->user->first_name . ' ' . $this->user->last_name);
 
-        // Build attributes array - Kajabi supports these fields
-        $attributes = [
-            'name' => $name,
-            'email' => $this->user->email,
-        ];
+        // Kajabi supports these fields. An empty name or email is left out rather than
+        // sent, so a partial update can't blank the contact's name or address.
+        $attributes = array_filter(
+            ['name' => $name, 'email' => trim($this->user->email)],
+            fn(string $value) => $value !== ''
+        );
 
         // Note: Password updates are not supported via PATCH in Kajabi
         // Password can only be set during user creation or via password reset flow

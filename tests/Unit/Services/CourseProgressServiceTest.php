@@ -132,12 +132,30 @@ class CourseProgressServiceTest extends TestCase
             'page' => 2,
             'page[number]' => 2,
             'start_page' => 2,
-            'max_pages' => 3,
             'sort' => 'id',
             'query[email]' => 'x@example.com',
         ]));
 
         $this->assertSame(['filter[product_id]' => 1], $query);
+    }
+
+    public function test_max_pages_is_honoured_and_not_sent(): void
+    {
+        $mockClient = new MockClient([
+            MockResponse::make(MemberActivityPayloads::progressPage([MemberActivityPayloads::progressRowComplete()], nextAfter: '900001')),
+            MockResponse::make(MemberActivityPayloads::progressPage([MemberActivityPayloads::progressRowPartial()], nextAfter: '900002')),
+            MockResponse::make(MemberActivityPayloads::progressPage([MemberActivityPayloads::progressRowEmpty()])),
+        ]);
+
+        $rows = $this->collect($this->serviceWithMock($mockClient)->forCourse(2000001, ['limit' => 1, 'max_pages' => 2, 'start_page' => 3]));
+
+        $this->assertSame([900001, 900002], array_map(fn(CourseProgress $r) => $r->id, $rows));
+        $mockClient->assertSentCount(2);
+        foreach ($mockClient->getRecordedResponses() as $response) {
+            $query = $response->getPendingRequest()->query()->all();
+            $this->assertArrayNotHasKey('max_pages', $query);
+            $this->assertArrayNotHasKey('page[number]', $query, 'start_page must not become page[number] (400)');
+        }
     }
 
     public function test_datetime_updated_since_keeps_offset(): void

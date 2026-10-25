@@ -117,7 +117,7 @@ class CourseService extends Resource implements CourseServiceInterface
      */
     public function chapters(int $productable_id): Paginator
     {
-        throw new \Exception('Chapter listing not yet implemented for Kajabi. Kajabi uses: Offers → Products → Courses → Modules → Lessons hierarchy.');
+        throw new \Exception('Chapter listing is not supported: Kajabi uses Offers → Products → Courses → Modules → Lessons. Use $kajabi->courses->structure($productId) with a product id to read modules and lessons.');
     }
 
     /**

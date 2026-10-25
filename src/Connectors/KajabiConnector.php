@@ -15,6 +15,7 @@ use Saloon\RateLimitPlugin\Stores\MemoryStore;
 use Saloon\RateLimitPlugin\Traits\HasRateLimits;
 use Saloon\Traits\Plugins\AcceptsJson;
 use Saloon\Traits\Plugins\AlwaysThrowOnErrors;
+use Saloon\Traits\Plugins\HasTimeout;
 use WooNinja\KajabiSaloon\Exceptions\UnsupportedFilterException;
 use WooNinja\KajabiSaloon\Requests\Concerns\SupportedFilters;
 use WooNinja\KajabiSaloon\Requests\Contracts\DeclaresSupportedFilters;
@@ -23,6 +24,7 @@ class KajabiConnector extends Connector implements HasPagination
 {
     use AcceptsJson;
     use AlwaysThrowOnErrors;
+    use HasTimeout;
     use HasRateLimits {
         handleExceededLimit as private traitHandleExceededLimit;
     }
@@ -62,6 +64,14 @@ class KajabiConnector extends Connector implements HasPagination
     public bool $sleepOnRateLimit = false;
     public int $maxRateLimitSleepSeconds = 60;
     public bool $strictFilters = false;
+
+    /**
+     * Seconds. Without a timeout a stalled Kajabi response holds the worker
+     * indefinitely (one was observed taking 300s before the socket gave up).
+     * Large pages (page[size]=1000 on /customers) take a few seconds.
+     */
+    protected float $connectTimeout = 10;
+    protected float $requestTimeout = 60;
     public string $baseUrl = 'https://api.kajabi.com/v1';
 
     public function __construct()
@@ -107,6 +117,16 @@ class KajabiConnector extends Connector implements HasPagination
     public function setRateLimit(int $limit): void
     {
         $this->rateLimit = $limit;
+    }
+
+    /**
+     * Connection and whole-request timeouts in seconds (defaults 10 and 60).
+     * A timeout throws Saloon\Exceptions\Request\FatalRequestException.
+     */
+    public function setTimeouts(float $connectSeconds, float $requestSeconds): void
+    {
+        $this->connectTimeout = $connectSeconds;
+        $this->requestTimeout = $requestSeconds;
     }
 
     /**
