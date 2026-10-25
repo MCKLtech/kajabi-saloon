@@ -51,7 +51,7 @@ class RateLimitTest extends TestCase
         return MockResponse::make('error code: 1015', 429, ['Content-Type' => 'text/plain; charset=UTF-8', 'Retry-After' => '600']);
     }
 
-    private function connector(MockClient $mockClient, int $limit = 2): KajabiConnector
+    private function connector(MockClient $mockClient, int $limit = 12): KajabiConnector
     {
         $connector = (new KajabiConnector())->withMockClient($mockClient);
         $connector->setRateLimit($limit);
@@ -66,29 +66,78 @@ class RateLimitTest extends TestCase
         }
     }
 
-    public function test_defaults_throw_and_stay_well_under_the_ip_limit(): void
+    public function test_defaults_throw_and_stay_under_the_ip_limit_in_any_rolling_minute(): void
     {
         $connector = new KajabiConnector();
 
         $this->assertFalse($connector->sleepOnRateLimit, 'throwing is the default; sleeping is opt-in');
-        $this->assertSame(KajabiConnector::DEFAULT_RATE_LIMIT, $connector->rateLimit);
+        $this->assertSame(800, $connector->rateLimit, 'whole-IP budget, assuming a shared store');
         $this->assertSame(KajabiConnector::DEFAULT_RATE_LIMIT_NAME, $connector->rateLimitName);
-        $this->assertLessThan(KajabiConnector::KAJABI_IP_LIMIT_PER_MINUTE, $connector->rateLimit);
+        $this->assertSame(134, $connector->rateLimitSliceSize());
+
+        // A rolling 60 seconds overlaps at most 7 ten-second slices
+        $worstRollingMinute = min(2 * $connector->rateLimit, 7 * $connector->rateLimitSliceSize());
+        $this->assertLessThan(KajabiConnector::KAJABI_IP_LIMIT_PER_MINUTE, $worstRollingMinute);
     }
 
-    public function test_limit_throws_by_default(): void
+    public function test_limits_are_a_minute_budget_and_ten_second_slices(): void
     {
-        $connector = $this->connector(new MockClient([self::ok(), self::ok(), self::ok()]));
+        $connector = new KajabiConnector();
+        $connector->setRateLimit(300);
+
+        $limits = [];
+        foreach ($connector->getLimits() as $limit) {
+            $limits[$limit->getName()] = [$limit->getAllow(), $limit->getReleaseInSeconds()];
+        }
+
+        $this->assertSame([300, 60], $limits['kajabi:kajabi-api']);
+        $this->assertSame([50, 10], $limits['kajabi:kajabi-api:10s']);
+        $this->assertArrayHasKey('kajabi:too_many_attempts_limit', $limits, 'Kajabi 429s are still recorded');
+    }
+
+    public function test_slice_throws_once_its_share_is_used(): void
+    {
+        $connector = $this->connector(new MockClient([self::ok(), self::ok(), self::ok()]), 12);
         $this->sendTimes($connector, 2);
 
-        $this->expectException(RateLimitReachedException::class);
-        $connector->send(new GetContact(1));
+        try {
+            $connector->send(new GetContact(1));
+            $this->fail('Expected RateLimitReachedException');
+        } catch (RateLimitReachedException $e) {
+            $this->assertSame('kajabi:kajabi-api:10s', $e->getLimit()->getName());
+        }
+
+        $this->assertGreaterThan(0, $connector->secondsUntilAvailable());
+        $this->assertLessThanOrEqual(10, $connector->secondsUntilAvailable());
+    }
+
+    /**
+     * Other workers have used the minute's budget (they share the store), so this
+     * process is refused even though its own slice has room
+     */
+    public function test_minute_budget_used_by_other_workers_throws(): void
+    {
+        $store = new MemoryStore();
+        $store->set('kajabi:kajabi-api', json_encode(['timestamp' => time() + 45, 'hits' => 12]), 45);
+        $mockClient = new MockClient([self::ok()]);
+        $connector = $this->connector($mockClient, 12);
+        $connector->setRateStore($store);
+
+        try {
+            $connector->send(new GetContact(1));
+            $this->fail('Expected RateLimitReachedException');
+        } catch (RateLimitReachedException $e) {
+            $this->assertSame('kajabi:kajabi-api', $e->getLimit()->getName());
+        }
+
+        $mockClient->assertNothingSent();
+        $this->assertGreaterThan(40, $connector->secondsUntilAvailable());
     }
 
     public function test_connectors_share_one_bucket_by_default(): void
     {
-        $siteA = $this->connector(new MockClient([self::ok(), self::ok()]));
-        $siteB = $this->connector(new MockClient([self::ok()]));
+        $siteA = $this->connector(new MockClient([self::ok(), self::ok()]), 12);
+        $siteB = $this->connector(new MockClient([self::ok()]), 12);
 
         $this->sendTimes($siteA, 2);
 
@@ -98,8 +147,8 @@ class RateLimitTest extends TestCase
 
     public function test_separate_names_get_separate_buckets(): void
     {
-        $siteA = $this->connector(new MockClient([self::ok(), self::ok()]));
-        $siteB = $this->connector(new MockClient([self::ok()]));
+        $siteA = $this->connector(new MockClient([self::ok(), self::ok()]), 12);
+        $siteB = $this->connector(new MockClient([self::ok()]), 12);
         $siteB->setRateLimitName('kajabi-api:second-egress-ip');
 
         $this->sendTimes($siteA, 2);
@@ -111,9 +160,9 @@ class RateLimitTest extends TestCase
 
     public function test_subclasses_share_the_bucket(): void
     {
-        $base = $this->connector(new MockClient([self::ok(), self::ok()]));
+        $base = $this->connector(new MockClient([self::ok(), self::ok()]), 12);
         $sub = new class extends KajabiConnector {};
-        $sub->withMockClient(new MockClient([self::ok()]))->setRateLimit(2);
+        $sub->withMockClient(new MockClient([self::ok()]))->setRateLimit(12);
 
         $this->sendTimes($base, 2);
 
@@ -121,10 +170,10 @@ class RateLimitTest extends TestCase
         $sub->send(new GetContact(1));
     }
 
-    public function test_sleep_waits_for_the_window_instead_of_throwing(): void
+    public function test_sleep_waits_for_the_slice_instead_of_throwing(): void
     {
         $mockClient = new MockClient([self::ok(), self::ok(), self::ok()]);
-        $connector = $this->connector($mockClient);
+        $connector = $this->connector($mockClient, 12);
         $connector->setSleepOnRateLimit();
 
         $this->sendTimes($connector, 3);
@@ -132,12 +181,12 @@ class RateLimitTest extends TestCase
         $mockClient->assertSentCount(3);
         $this->assertCount(1, $this->sleeps);
         $this->assertGreaterThan(0, $this->sleeps[0]);
-        $this->assertLessThanOrEqual(60_000_000, $this->sleeps[0], 'at most the one-minute window');
+        $this->assertLessThanOrEqual(10_000_000, $this->sleeps[0], 'at most one 10-second slice');
     }
 
     public function test_sleep_longer_than_the_cap_throws(): void
     {
-        $connector = $this->connector(new MockClient([self::ok(), self::ok(), self::ok()]));
+        $connector = $this->connector(new MockClient([self::ok(), self::ok(), self::ok()]), 12);
         $connector->setSleepOnRateLimit(true, 0);
 
         $this->sendTimes($connector, 2);

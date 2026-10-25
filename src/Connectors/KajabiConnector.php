@@ -51,12 +51,27 @@ class KajabiConnector extends Connector implements HasPagination
     public const KAJABI_BLOCK_SECONDS = 600;
 
     /**
-     * Client-side default. Deliberately a tenth of the IP limit: the default
-     * MemoryStore counts per PHP process, so this stays safe with several
-     * workers. With a shared store (setRateStore) across every process on the
-     * IP, up to ~900 is reasonable.
+     * Client-side budget per minute for the WHOLE IP. Designed for a store shared
+     * by every process on the server (setRateStore(), e.g. Laravel's Redis cache):
+     * all workers draw from one bucket.
+     *
+     * With the default in-process MemoryStore each PHP process counts alone, so
+     * N workers could send N times this - set a shared store, or divide the
+     * limit by the number of processes.
+     *
+     * 800/min sliced into 10s windows (RATE_LIMIT_SLICE_SECONDS) keeps any
+     * rolling 60 seconds under ~940 requests - below Kajabi's ~1000 even when a
+     * burst straddles a window boundary.
      */
-    public const DEFAULT_RATE_LIMIT = 100;
+    public const DEFAULT_RATE_LIMIT = 800;
+
+    /**
+     * The per-minute budget is also enforced in slices of this many seconds
+     * (budget / 6 each). A single fixed one-minute window would let a burst at
+     * the end of one minute plus one at the start of the next send twice the
+     * budget within 60 seconds; with slices the worst rolling minute is 7/6 of it.
+     */
+    public const RATE_LIMIT_SLICE_SECONDS = 10;
 
     public bool|RateLimitStore $rateStore = false;
     public int $rateLimit = self::DEFAULT_RATE_LIMIT; // requests per minute, client side
@@ -109,7 +124,10 @@ class KajabiConnector extends Connector implements HasPagination
     }
 
     /**
-     * Dynamically set the rate limit
+     * Requests per minute for every process sharing the rate limit store (default 800)
+     *
+     * Also enforced in 10-second slices of ceil($limit / 6); the worst rolling
+     * minute is about 7/6 of $limit, so stay at or below ~850.
      *
      * @param int $limit
      * @return void
@@ -207,6 +225,7 @@ class KajabiConnector extends Connector implements HasPagination
     /**
      * Rate limits for Kajabi
      *
+     * A per-minute budget plus 10-second slices of it (see RATE_LIMIT_SLICE_SECONDS).
      * The plugin also records Kajabi's own 429s (too_many_attempts_limit) for
      * their Retry-After, so no request is sent while the IP is blocked -
      * requests during a block risk extending it.
@@ -215,11 +234,26 @@ class KajabiConnector extends Connector implements HasPagination
      */
     protected function resolveLimits(): array
     {
-        $limit = Limit::allow(requests: $this->rateLimit, threshold: 0.99)
-            ->everyMinute()
-            ->name($this->rateLimitName);
+        $limits = [
+            Limit::allow(requests: $this->rateLimit)
+                ->everyMinute()
+                ->name($this->rateLimitName),
+            Limit::allow(requests: $this->rateLimitSliceSize())
+                ->everySeconds(self::RATE_LIMIT_SLICE_SECONDS)
+                ->name($this->rateLimitName . ':' . self::RATE_LIMIT_SLICE_SECONDS . 's'),
+        ];
 
-        return [$this->sleepOnRateLimit ? $limit->sleep() : $limit];
+        return $this->sleepOnRateLimit
+            ? array_map(fn(Limit $limit) => $limit->sleep(), $limits)
+            : $limits;
+    }
+
+    /**
+     * Requests allowed per RATE_LIMIT_SLICE_SECONDS window: a sixth of the per-minute budget
+     */
+    public function rateLimitSliceSize(): int
+    {
+        return max(1, (int) ceil($this->rateLimit * self::RATE_LIMIT_SLICE_SECONDS / 60));
     }
 
     /**

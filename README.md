@@ -6,7 +6,7 @@ A PHP library for the Kajabi API using Saloon. Drop-in replacement for `mckltech
 
 - ✅ **OAuth2 Authentication** - Automatic token management with Client Credentials flow
 - ✅ **Pagination Support** - Built-in pagination matching Thinkific's interface
-- ✅ **Rate Limiting** - Client-side limit (default: 100 req/min; Kajabi blocks an IP for 10 minutes above ~1000/min), throws by default
+- ✅ **Rate Limiting** - Shared-store budget of 800 req/min in 10-second slices (Kajabi blocks an IP for 10 minutes above ~1000/min); throws by default
 - ✅ **Type Safety** - Full DTOs implementing lms-contracts interfaces
 - ✅ **Global Site ID** - Set once, use everywhere
 - ✅ **Filter Translation** - Automatically translates Thinkific filters to Kajabi format
@@ -259,20 +259,26 @@ $users = $kajabi->users->users(['site_id' => 'different-site-id']);
 
 Kajabi doesn't publish its limit. Measured on 2026-10-24, it is **about 1000 requests per sliding 60 seconds per client IP**, enforced by Cloudflare for every token and site from that IP. Going over returns `429` (`text/plain` body `error code: 1015`, `Retry-After: 600`) and **blocks the IP for 10 minutes** — every endpoint, including the token exchange.
 
-The SDK keeps a client-side limit (default **100/min**, a deliberately safe tenth of that) and, by default, **throws** `RateLimitReachedException` when it is reached. After a real 429 it also stops sending until `Retry-After` has passed, because requests during a block risk extending it.
+The SDK keeps a client-side budget of **800 requests per minute for the whole IP**, and by default **throws** `RateLimitReachedException` when it is reached. The budget is also enforced in 10-second slices (a sixth each, 134), so even a burst across a minute boundary stays under ~940 requests in any rolling 60 seconds. After a real 429 the SDK stops sending until `Retry-After` has passed, because requests during a block risk extending it.
+
+**The budget assumes one rate-limit store shared by every process on the server**, such as Laravel's Redis cache, so all workers draw from the same bucket. Set it once where you build the service:
+
+```php
+use Saloon\RateLimitPlugin\Stores\LaravelCacheStore;
+use Illuminate\Support\Facades\Cache;
+
+$kajabi->connector()->setRateStore(new LaravelCacheStore(Cache::store('redis')));
+```
+
+Without a shared store, each PHP process counts on its own (the default in-memory store), so N workers could send N × 800 and trip the block. Use a shared store, or divide the budget: `setRateLimit(intdiv(800, $workers))`.
 
 ```php
 use Saloon\RateLimitPlugin\Exceptions\RateLimitReachedException;
 
 $connector = $kajabi->connector();
 
-// Share one bucket across every process on the server (recommended for queue workers)
-use Saloon\RateLimitPlugin\Stores\LaravelCacheStore;
-use Illuminate\Support\Facades\Cache;
-$connector->setRateStore(new LaravelCacheStore(Cache::store()));
-
-// With a shared store you can raise the client-side limit, staying under the IP limit
-$connector->setRateLimit(900);
+// Other services on the same IP also call Kajabi? Leave them room
+$connector->setRateLimit(600);   // per minute; stay at or below ~850
 
 // Handle the limit by rescheduling, not waiting (e.g. in a Laravel job)
 try {
