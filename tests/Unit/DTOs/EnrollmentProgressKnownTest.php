@@ -7,14 +7,14 @@ use PHPUnit\Framework\TestCase;
 use Saloon\Http\Faking\MockClient;
 use Saloon\Http\Faking\MockResponse;
 use Tests\Fixtures\KajabiApiResponses;
-use Tests\Fixtures\MemberActivityPayloads;
+use Tests\Fixtures\Json;
 use WooNinja\KajabiSaloon\Connectors\KajabiConnector;
-use WooNinja\KajabiSaloon\DataTransferObjects\CourseProgress\CourseProgress;
 use WooNinja\KajabiSaloon\DataTransferObjects\Enrollments\CreateEnrollment;
 use WooNinja\KajabiSaloon\DataTransferObjects\Enrollments\Enrollment;
 use WooNinja\KajabiSaloon\Requests\Contacts\GetContact;
 use WooNinja\KajabiSaloon\Requests\Offers\GetOffer;
 use WooNinja\KajabiSaloon\Requests\Offers\GrantOffer;
+use WooNinja\KajabiSaloon\Requests\Products\GetProducts;
 use WooNinja\KajabiSaloon\Services\KajabiService;
 
 /**
@@ -31,7 +31,14 @@ class EnrollmentProgressKnownTest extends TestCase
 
     private function fromOffer(?\DateTimeInterface $grantedAt = null): Enrollment
     {
-        return Enrollment::fromKajabiOffer(KajabiApiResponses::offer(), 123, 'a@example.com', 'A B', grantedAt: $grantedAt);
+        return Enrollment::fromKajabiOfferProduct(
+            KajabiApiResponses::offer(),
+            Json::data('products/course-a.json'),
+            123,
+            'a@example.com',
+            'A B',
+            grantedAt: $grantedAt
+        );
     }
 
     public function test_offer_enrollment_has_placeholder_progress_and_no_invented_dates(): void
@@ -68,21 +75,6 @@ class EnrollmentProgressKnownTest extends TestCase
         $this->assertFalse($enrollment->progress_known);
     }
 
-    public function test_course_progress_makes_progress_known(): void
-    {
-        $enrollment = $this->fromOffer()->withCourseProgress([
-            CourseProgress::fromKajabiCourseProgress(MemberActivityPayloads::progressRowEmpty(), 1),
-        ]);
-
-        $this->assertTrue($enrollment->progress_known, 'a real 0% is known progress');
-        $this->assertSame(0.0, $enrollment->percentage_completed);
-    }
-
-    public function test_no_progress_rows_leaves_progress_unknown(): void
-    {
-        $this->assertFalse($this->fromOffer()->withCourseProgress([])->progress_known);
-    }
-
     public function test_purchase_enrollment_progress_is_unknown(): void
     {
         $this->assertFalse(Enrollment::fromKajabiPurchase(KajabiApiResponses::purchase())->progress_known);
@@ -95,13 +87,14 @@ class EnrollmentProgressKnownTest extends TestCase
         $mockClient = new MockClient([
             GetContact::class => MockResponse::make(['data' => KajabiApiResponses::contact()]),
             GrantOffer::class => MockResponse::make([], 204),
-            GetOffer::class => MockResponse::make(['data' => KajabiApiResponses::offer()]),
+            GetOffer::class => MockResponse::make(['data' => Json::data('offers/offer-with-mixed-products.json')]),
+            GetProducts::class => MockResponse::make(Json::catalog()),
         ]);
         $kajabi = new KajabiService('test-client-id', 'test-client-secret', '111111');
         $kajabi->setConnector((new KajabiConnector())->withMockClient($mockClient));
         $kajabi->boot();
 
-        $enrollment = $kajabi->enrollments->create(new CreateEnrollment(user_id: 123, course_id: 456));
+        $enrollment = $kajabi->enrollments->create(new CreateEnrollment(user_id: 123, course_id: 5001));
 
         $this->assertTrue(Carbon::parse('2026-10-20T10:00:00Z')->eq($enrollment->started_at));
         $this->assertFalse($enrollment->progress_known);

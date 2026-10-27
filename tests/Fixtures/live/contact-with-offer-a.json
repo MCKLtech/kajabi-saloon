@@ -1,0 +1,123 @@
+{
+  "data": {
+    "id": "9300000001",
+    "type": "contacts",
+    "attributes": {
+      "name": "Test Contact",
+      "email": "test.contact@example.com",
+      "address_line_1": null,
+      "address_line_2": null,
+      "address_city": null,
+      "address_country": null,
+      "address_state": null,
+      "address_zip": null,
+      "phone_number": null,
+      "business_number": null,
+      "subscribed": false,
+      "external_user_id": null,
+      "created_at": "2026-10-27T10:00:00.000Z",
+      "updated_at": "2026-10-27T10:00:00.000Z"
+    },
+    "links": {
+      "customer": "https://api.kajabi.com/v1/customers/9400000001"
+    },
+    "relationships": {
+      "site": {
+        "data": {
+          "id": "9000000001",
+          "type": "sites"
+        }
+      },
+      "customer": {
+        "data": {
+          "id": "9400000001",
+          "type": "customers"
+        }
+      },
+      "offers": {
+        "data": [
+          {
+            "id": "9200000001",
+            "type": "offers"
+          }
+        ],
+        "links": {
+          "self": "https://api.kajabi.com/v1/contacts/9300000001/relationships/offers"
+        }
+      }
+    }
+  },
+  "links": {
+    "self": "https://api.kajabi.com/v1/contacts/9300000001?include=offers"
+  },
+  "included": [
+    {
+      "id": "9200000001",
+      "type": "offers",
+      "attributes": {
+        "title": "Offer A",
+        "description": "<p>Offer description</p>",
+        "internal_title": "Offer A (internal)",
+        "currency": "USD",
+        "price_in_cents": 0,
+        "payment_type": "free",
+        "token": "tok0001",
+        "image_url": null,
+        "payment_method": "free",
+        "price_description": "Free",
+        "checkout_url": "https://example.com/offers/tok/checkout",
+        "recurring_offer": false,
+        "subscription": false,
+        "one_time": false,
+        "single": true,
+        "free": true,
+        "plan_changes_enabled": false
+      },
+      "relationships": {
+        "site": {
+          "data": {
+            "id": "9000000001",
+            "type": "sites"
+          }
+        },
+        "products": {
+          "data": [
+            {
+              "id": "9100000001",
+              "type": "products"
+            },
+            {
+              "id": "9100000002",
+              "type": "products"
+            },
+            {
+              "id": "9100000101",
+              "type": "products"
+            },
+            {
+              "id": "9100000003",
+              "type": "products"
+            },
+            {
+              "id": "9100000201",
+              "type": "products"
+            },
+            {
+              "id": "9100000004",
+              "type": "products"
+            }
+          ]
+        },
+        "plans": {
+          "data": []
+        },
+        "pricing_options": {
+          "data": []
+        },
+        "forms": {
+          "data": []
+        }
+      }
+    }
+  ]
+}

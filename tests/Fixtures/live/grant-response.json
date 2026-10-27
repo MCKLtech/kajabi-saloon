@@ -1,0 +1,11 @@
+{
+  "data": [
+    {
+      "type": "offers",
+      "id": "9200000001"
+    }
+  ],
+  "links": {
+    "self": "https://api.kajabi.com/v1/contacts/9300000001/relationships/offers"
+  }
+}

@@ -23,9 +23,8 @@ class EnrollmentTest extends TestCase
         $purchaseData = KajabiApiResponses::purchase();
         $enrollment = Enrollment::fromKajabiPurchase($purchaseData);
 
-        // Enrollment ID is the concatenated string offer_id + contact_id
-        // (string to avoid integer overflow on large Kajabi IDs)
-        $this->assertEquals('101456', $enrollment->id);
+        // "{product_id}:{contact_id}", a string (concatenated Kajabi IDs overflow an int)
+        $this->assertSame('202:456', $enrollment->id);
         $this->assertEquals('john.doe@example.com', $enrollment->user_email);
         $this->assertEquals('John Doe', $enrollment->user_name);
         $this->assertEquals('Introduction to Marketing', $enrollment->course_name);
@@ -201,8 +200,7 @@ class EnrollmentTest extends TestCase
         // Should NOT be PHP_INT_MAX (the overflow value)
         $this->assertNotEquals(PHP_INT_MAX, $enrollmentId);
 
-        // Should be a valid string representation of the concatenated IDs
-        $this->assertEquals('29000000012800000001', $enrollmentId);
+        $this->assertSame('2900000001:2800000001', $enrollmentId);
     }
 
     public function test_get_enrollment_id_returns_string_type(): void
@@ -248,28 +246,34 @@ class EnrollmentTest extends TestCase
         $enrollment = Enrollment::fromKajabiPurchase($purchaseData, $includedMap);
 
         // The enrollment ID should be a string, not truncated to PHP_INT_MAX
-        $this->assertEquals('29000000012800000001', $enrollment->id);
+        $this->assertSame('202:2800000001', $enrollment->id);
         $this->assertNotEquals(PHP_INT_MAX, $enrollment->id);
+    }
+
+    public function test_enrollment_id_is_product_colon_contact(): void
+    {
+        $this->assertSame('123:456', Enrollment::getEnrollmentId(123, 456));
+        $this->assertSame([123, 456], Enrollment::parseEnrollmentId('123:456'));
+        $this->assertNull(Enrollment::parseEnrollmentId('123456'));
+        $this->assertNull(Enrollment::parseEnrollmentId('a:1'));
     }
 
     public function test_enrollment_from_offer_uses_string_id_for_large_ids(): void
     {
-        $offerData = KajabiApiResponses::offer();
-        $offerData['id'] = 2900000001;
+        $product = KajabiApiResponses::product();
+        $product['id'] = '2900000001';
 
-        $customerId = 2800000001;
-        $customerEmail = 'test@example.com';
-        $customerName = 'Test User';
-
-        $enrollment = Enrollment::fromKajabiOffer(
-            $offerData,
-            $customerId,
-            $customerEmail,
-            $customerName
+        $enrollment = Enrollment::fromKajabiOfferProduct(
+            KajabiApiResponses::offer(),
+            $product,
+            2800000001,
+            'test@example.com',
+            'Test User'
         );
 
         // The enrollment ID should be a string, not truncated to PHP_INT_MAX
-        $this->assertEquals('29000000012800000001', $enrollment->id);
+        $this->assertSame('2900000001:2800000001', $enrollment->id);
+        $this->assertSame(2900000001, $enrollment->course_id, 'course_id is the product, not the offer');
         $this->assertNotEquals(PHP_INT_MAX, $enrollment->id);
     }
 

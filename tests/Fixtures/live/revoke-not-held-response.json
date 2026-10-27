@@ -1,0 +1,10 @@
+{
+  "errors": [
+    {
+      "status": "400",
+      "source": null,
+      "title": "Bad Request",
+      "detail": "Cannot remove relationships"
+    }
+  ]
+}

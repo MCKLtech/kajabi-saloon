@@ -9,23 +9,30 @@ use WooNinja\KajabiSaloon\DataTransferObjects\Enrollments\Enrollment;
 use WooNinja\LMSContracts\Contracts\DTOs\Users\UserInterface;
 
 /**
- * Get Enrollments (Offers granted) for a specific Contact
+ * A Contact's enrollments: one per course product across the offers they hold
  *
- * Endpoint: GET /contacts/{contact_id}/relationships/offers
+ * Endpoint: GET /contacts/{contact_id}?include=offers
  *
- * Returns Enrollment DTOs representing the user's access to offers
+ * Each offer is expanded into its course products (via $courseProducts) and
+ * the result de-duplicated by product, so two offers granting one course give
+ * one enrollment. Single page: Kajabi returns all of a contact's offers at once.
  */
 class GetContactOffers extends Request implements Paginatable
 {
     protected Method $method = Method::GET;
 
     /**
-     * @param int|null $offerId Only this offer (filtered client-side: Kajabi can't filter a contact's offers)
+     * @param \Closure(int): array<int, array> $courseProducts Offer id => its course product resources keyed by id
+     *        (ProductService::courseProductsForOffer())
+     * @param int|null $productId Only this course product (filtered client-side: Kajabi can't filter a contact's offers)
+     * @param int|null $offerId Only this offer
      */
     public function __construct(
         private UserInterface $contact,
+        private \Closure      $courseProducts,
         private array         $filters = [],
         private ?string       $defaultSiteId = null,
+        private ?int          $productId = null,
         private ?int          $offerId = null,
     )
     {
@@ -90,22 +97,34 @@ class GetContactOffers extends Request implements Paginatable
 
         $enrollments = [];
 
-        // The contact's offers in Kajabi's order; an identifier without an included
-        // resource still becomes an enrollment (just without a title)
+        // Offers in Kajabi's order, products in each offer's order; an offer
+        // without an included resource still expands (its products are looked up by id)
         foreach ($response->json('data.relationships.offers.data', []) as $identifier) {
-            if ($this->offerId !== null && (int) $identifier['id'] !== $this->offerId) {
+            $offerId = (int) $identifier['id'];
+
+            if ($this->offerId !== null && $offerId !== $this->offerId) {
                 continue;
             }
 
-            $enrollments[] = Enrollment::fromKajabiOffer(
-                $included[$identifier['id']] ?? $identifier,
-                $this->contact->id,
-                '', // filled from $this->contact
-                '',
-                $this->contact
-            );
+            foreach (($this->courseProducts)($offerId) as $productId => $product) {
+                if ($this->productId !== null && $productId !== $this->productId) {
+                    continue;
+                }
+
+                $enrollment = Enrollment::fromKajabiOfferProduct(
+                    $included[$identifier['id']] ?? $identifier,
+                    $product,
+                    $this->contact->id,
+                    '', // filled from $this->contact
+                    '',
+                    $this->contact
+                );
+
+                // First offer wins; no grant dates here to prefer one over another
+                $enrollments[$enrollment->id] ??= $enrollment;
+            }
         }
 
-        return $enrollments;
+        return array_values($enrollments);
     }
 }

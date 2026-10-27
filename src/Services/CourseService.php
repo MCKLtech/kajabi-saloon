@@ -10,92 +10,68 @@ use WooNinja\KajabiSaloon\DataTransferObjects\Courses\CourseStructure;
 use WooNinja\KajabiSaloon\DataTransferObjects\Lessons\Lesson;
 use WooNinja\KajabiSaloon\DataTransferObjects\Modules\Module;
 use WooNinja\KajabiSaloon\Requests\Courses\GetCourseStructure;
-use WooNinja\KajabiSaloon\Requests\Offers\GetOffer;
-use WooNinja\KajabiSaloon\Requests\Offers\GetOffers;
+use WooNinja\KajabiSaloon\Requests\Products\GetCourseProducts;
+use WooNinja\KajabiSaloon\Requests\Products\GetProduct;
 use WooNinja\LMSContracts\Contracts\Services\CourseServiceInterface;
 use WooNinja\LMSContracts\Contracts\DTOs\Courses\CourseInterface;
 use WooNinja\LMSContracts\Contracts\DTOs\Products\ProductInterface;
 
 /**
- * Course Service for Kajabi (returns Offers for Thinkific compatibility)
+ * Course Service for Kajabi: courses are Kajabi course PRODUCTS
  *
- * CRITICAL ARCHITECTURE CHANGE:
- * - Dashboard thinks it's browsing "Courses" that users can enroll in
- * - In Kajabi, users enroll by being granted OFFERS (not Products directly)
- * - This service returns OFFERS masquerading as "Courses/Products"
- * - When dashboard says "enroll in Course 789", it's actually "grant Offer 789"
- *
- * WHY THIS WORKS:
- * - Offer DTO implements ProductInterface (looks like a Product to dashboard)
- * - Dashboard gets enrollable items (offers) not content items (products)
- * - EnrollmentService receives offer_id in course_id parameter
- * - Clean, simple enrollment: just grant/revoke the offer
+ * - course_id = Product ID (a course product's id is also its /v1/courses id)
+ * - Cohort courses are included; communities, coaching, podcasts and access
+ *   groups are not
+ * - What a contact enrolls in is an OFFER (a bundle of these courses): see
+ *   $kajabi->products and $kajabi->bundles
  *
  * KAJABI CONCEPTS:
  * - PRODUCTS: Content items (courses, communities, coaching, memberships)
  * - OFFERS: Pricing/access packages that grant access to one or more products
- * - PURCHASES: When a user is granted an offer (their "enrollment")
- *
- * For Thinkific compatibility:
- * - "Course" = Offer (what you enroll in)
- * - course_id = offer_id
  */
 class CourseService extends Resource implements CourseServiceInterface
 {
     /**
-     * Get a Course by ID (actually gets an Offer)
+     * Get a Course (a course product) by Product ID
      *
-     * @param int $course_id Offer ID (dashboard thinks it's course ID)
+     * @param int $course_id Product ID
      * @return CourseInterface
      * @throws FatalRequestException
      * @throws RequestException
      */
     public function get(int $course_id): CourseInterface
     {
-        // Get the Offer
-        $response = $this->connector->send(new GetOffer($course_id));
-        $offerData = $response->json('data');
-
-        // Transform Offer to Course DTO for CourseInterface compatibility
-        // We use Course::fromKajabiOffer() which transforms offer to course structure
-        return Course::fromKajabiOffer($offerData);
+        return Course::fromKajabiProduct(
+            $this->connector->send(new GetProduct($course_id))->json('data')
+        );
     }
 
     /**
-     * Get a list of Courses (actually lists Offers)
+     * List Courses: the site's course products, as Course DTOs
      *
-     * @param array $filters
-     * @return Paginator Returns Offer DTOs implementing ProductInterface
+     * Kajabi can't filter products by type, so non-course products are dropped
+     * client-side and a page can hold fewer than `limit` courses.
+     *
+     * @param array $filters name_cont, description_cont, limit, max_pages
+     * @return Paginator
      */
     public function courses(array $filters = []): Paginator
     {
-        // Return Offers instead of Products
-        // Each Offer implements ProductInterface, so dashboard sees them as "Products/Courses"
         return $this->connector
-            ->paginate(new GetOffers($filters, $this->getDefaultSiteId()));
+            ->paginate(new GetCourseProducts($filters, $this->getDefaultSiteId()));
     }
 
     /**
-     * Return the associated Product of a Course
+     * The Kajabi product behind a Course (the course product itself)
      *
-     * Since "Courses" are actually Offers in this architecture:
-     * - An Offer can grant access to multiple Products
-     * - This method returns the first/primary product from the offer
-     *
-     * @param int $course_id Offer ID
+     * @param int $course_id Product ID
      * @return ProductInterface
      * @throws FatalRequestException
      * @throws RequestException
      */
     public function product(int $course_id): ProductInterface
     {
-        // Get the offer
-        $response = $this->connector->send(new GetOffer($course_id));
-        $offerData = $response->json('data');
-
-        // The Offer DTO already implements ProductInterface
-        // So we can return it directly as a "Product"
-        return \WooNinja\KajabiSaloon\DataTransferObjects\Offers\Offer::fromKajabiOffer($offerData);
+        return $this->connector->send(new GetProduct($course_id))->dtoOrFail();
     }
 
     /**
@@ -112,7 +88,7 @@ class CourseService extends Resource implements CourseServiceInterface
      * 3. Get the Course content from those Products
      * 4. Return Modules/Lessons as "Chapters"
      *
-     * @param int $productable_id Offer ID
+     * @param int $productable_id Product ID
      * @return Paginator
      */
     public function chapters(int $productable_id): Paginator
@@ -123,8 +99,7 @@ class CourseService extends Resource implements CourseServiceInterface
     /**
      * Modules and lessons of a course product, in order, from one request
      *
-     * Takes a PRODUCT id (a "Course" product's id is also its /v1/courses id),
-     * not the offer id the rest of this service uses. Kajabi has no lesson or
+     * Takes a PRODUCT id (a "Course" product's id is also its /v1/courses id). Kajabi has no lesson or
      * module endpoints, so this is the only source of titles and order.
      *
      * @throws RequestException 404 for products that aren't courses, 403 for ids not on the account

@@ -6,15 +6,16 @@ use PHPUnit\Framework\TestCase;
 use Saloon\Exceptions\Request\RequestException;
 use Saloon\Http\Faking\MockClient;
 use Saloon\Http\Faking\MockResponse;
+use Tests\Fixtures\Json;
 use Tests\Fixtures\KajabiApiResponses;
 use WooNinja\KajabiSaloon\Connectors\KajabiConnector;
 use WooNinja\KajabiSaloon\DataTransferObjects\Enrollments\Enrollment;
 use WooNinja\KajabiSaloon\Requests\Contacts\GetContact;
 use WooNinja\KajabiSaloon\Requests\Contacts\GetContactOffers;
 use WooNinja\KajabiSaloon\Requests\Contacts\GetContacts;
-use WooNinja\KajabiSaloon\Requests\Contacts\GetContactsWithOffer;
+use WooNinja\KajabiSaloon\Requests\Contacts\GetContactsWithProduct;
 use WooNinja\KajabiSaloon\Requests\Customers\GetCustomers;
-use WooNinja\KajabiSaloon\Requests\Offers\GetOffer;
+use WooNinja\KajabiSaloon\Requests\Products\GetProducts;
 use WooNinja\KajabiSaloon\Requests\Purchases\GetPurchases;
 use WooNinja\KajabiSaloon\Services\KajabiService;
 
@@ -32,75 +33,72 @@ class EnrollmentLookupTest extends TestCase
         return $kajabi;
     }
 
-    private static function offer(int $id, string $title): array
+    private static function offer(int $id, string $title, array $productIds): array
     {
-        return ['id' => (string) $id, 'type' => 'offers', 'attributes' => ['title' => $title, 'price_in_cents' => 0]];
-    }
-
-    /**
-     * GET /contacts/{id}?include=offers as Kajabi sends it (offers in the relationship and in included)
-     */
-    private static function contactWithOffers(array $offers): MockResponse
-    {
-        $contact = KajabiApiResponses::contact();
-        $contact['relationships']['offers'] = [
-            'data' => array_map(fn($o) => ['id' => $o['id'], 'type' => 'offers'], $offers),
-            'links' => ['self' => 'https://api.kajabi.com/v1/contacts/123/relationships/offers'],
+        return [
+            'id' => (string) $id,
+            'type' => 'offers',
+            'attributes' => ['title' => $title, 'price_in_cents' => 0],
+            'relationships' => ['products' => ['data' => array_map(fn($p) => ['id' => (string) $p, 'type' => 'products'], $productIds)]],
         ];
-
-        return MockResponse::make(['data' => $contact, 'included' => $offers, 'links' => ['self' => 'x']]);
     }
 
-    public function test_enrollments_for_user_carry_offer_titles(): void
+    public function test_enrollments_for_user_carry_product_titles(): void
     {
         $mockClient = new MockClient([
             GetContact::class => MockResponse::make(['data' => KajabiApiResponses::contact()]),
-            GetContactOffers::class => self::contactWithOffers([self::offer(701, 'Leadership'), self::offer(702, 'Billing')]),
+            GetContactOffers::class => MockResponse::make(Json::load('contacts/contact-with-two-offers.json')),
+            GetProducts::class => MockResponse::make(Json::catalog()),
+            'api.kajabi.com/v1/offers/5001' => MockResponse::make(Json::load('offers/offer-with-mixed-products.json')),
+            'api.kajabi.com/v1/offers/5002' => MockResponse::make(['data' => self::offer(5002, 'Course A Only', [2001])]),
         ]);
 
         $enrollments = iterator_to_array($this->kajabi($mockClient)->enrollments->enrollmentsForUser(123)->items(), false);
 
-        $this->assertSame([701, 702], array_map(fn(Enrollment $e) => $e->course_id, $enrollments));
-        $this->assertSame(['Leadership', 'Billing'], array_map(fn(Enrollment $e) => $e->course_name, $enrollments));
+        $this->assertSame([2001, 2002], array_map(fn(Enrollment $e) => $e->course_id, $enrollments));
+        $this->assertSame(['Course A', 'Course B'], array_map(fn(Enrollment $e) => $e->course_name, $enrollments));
         $this->assertSame('john.doe@example.com', $enrollments[0]->user_email);
 
-        $request = $mockClient->getLastPendingRequest();
-        $this->assertSame('/contacts/123', $request->getRequest()->resolveEndpoint());
-        $this->assertSame('offers', $request->query()->get('include'));
+        $contactRequest = $mockClient->getRecordedResponses()[1]->getPendingRequest();
+        $this->assertSame('/contacts/123', $contactRequest->getRequest()->resolveEndpoint());
+        $this->assertSame('offers', $contactRequest->query()->get('include'));
     }
 
-    public function test_offer_missing_from_included_still_becomes_an_enrollment(): void
+    public function test_offer_missing_from_included_still_expands(): void
     {
-        $response = self::contactWithOffers([self::offer(701, 'Leadership')]);
+        $body = Json::load('contacts/contact-with-two-offers.json');
+        $body['included'] = [];
+
         $mockClient = new MockClient([
             GetContact::class => MockResponse::make(['data' => KajabiApiResponses::contact()]),
-            GetContactOffers::class => MockResponse::make((function () use ($response) {
-                $body = $response->body()->all();
-                $body['data']['relationships']['offers']['data'][] = ['id' => '799', 'type' => 'offers'];
-
-                return $body;
-            })()),
+            GetContactOffers::class => MockResponse::make($body),
+            GetProducts::class => MockResponse::make(Json::catalog()),
+            'api.kajabi.com/v1/offers/5001' => MockResponse::make(Json::load('offers/offer-with-mixed-products.json')),
+            'api.kajabi.com/v1/offers/5002' => MockResponse::make(['data' => self::offer(5002, 'Course A Only', [2001])]),
         ]);
 
         $enrollments = iterator_to_array($this->kajabi($mockClient)->enrollments->enrollmentsForUser(123)->items(), false);
 
-        $this->assertSame([701, 799], array_map(fn(Enrollment $e) => $e->course_id, $enrollments));
-        $this->assertSame('', $enrollments[1]->course_name);
+        $this->assertSame(['Course A', 'Course B'], array_map(fn(Enrollment $e) => $e->course_name, $enrollments));
     }
 
-    public function test_enrollments_for_user_in_course_only_returns_that_course(): void
+    public function test_enrollments_for_user_in_course_only_returns_that_product(): void
     {
         $mockClient = new MockClient([
             GetContact::class => MockResponse::make(['data' => KajabiApiResponses::contact()]),
-            GetContactOffers::class => self::contactWithOffers([self::offer(701, 'Leadership'), self::offer(702, 'Billing')]),
+            GetContactOffers::class => MockResponse::make(Json::load('contacts/contact-with-two-offers.json')),
+            GetProducts::class => MockResponse::make(Json::catalog()),
+            'api.kajabi.com/v1/offers/5001' => MockResponse::make(Json::load('offers/offer-with-mixed-products.json')),
+            'api.kajabi.com/v1/offers/5002' => MockResponse::make(['data' => self::offer(5002, 'Course A Only', [2001])]),
         ]);
+        $enrollments = $this->kajabi($mockClient)->enrollments;
 
-        $enrollments = iterator_to_array(
-            $this->kajabi($mockClient)->enrollments->enrollmentsForUserInCourse(123, 702)->items(),
-            false
-        );
+        $inB = iterator_to_array($enrollments->enrollmentsForUserInCourse(123, 2002)->items(), false);
 
-        $this->assertSame([702], array_map(fn(Enrollment $e) => $e->course_id, $enrollments));
+        $this->assertSame(['2002:123'], array_map(fn(Enrollment $e) => $e->id, $inB));
+        $this->assertTrue($enrollments->isUserEnrolledInCourse(123, 2001));
+        $this->assertFalse($enrollments->isUserEnrolledInCourse(123, 2003), 'access groups are not courses');
+        $this->assertFalse($enrollments->isUserEnrolledInCourse(123, 5001), 'an offer id is not a course id');
     }
 
     public function test_enrollments_for_unknown_email_are_empty_without_unsupported_filters(): void
@@ -118,18 +116,20 @@ class EnrollmentLookupTest extends TestCase
         $this->assertSame('0', (string) $mockClient->getLastPendingRequest()->query()->get('filter[customer_id]'));
     }
 
-    public function test_enrollments_for_course_use_the_offer_title(): void
+    public function test_enrollments_for_course_are_contacts_with_the_product(): void
     {
         $mockClient = new MockClient([
-            GetOffer::class => MockResponse::make(['data' => self::offer(701, 'Leadership')]),
-            GetContactsWithOffer::class => MockResponse::make(['data' => [KajabiApiResponses::contact()], 'meta' => ['total' => 1], 'links' => []]),
+            GetProducts::class => MockResponse::make(Json::catalog()),
+            GetContactsWithProduct::class => MockResponse::make(['data' => [KajabiApiResponses::contact()], 'meta' => ['total' => 1], 'links' => []]),
         ]);
 
-        $enrollments = iterator_to_array($this->kajabi($mockClient)->enrollments->enrollmentsForCourse(701)->items(), false);
+        $enrollments = iterator_to_array($this->kajabi($mockClient)->enrollments->enrollmentsForCourse(2002)->items(), false);
 
-        $this->assertSame('Leadership', $enrollments[0]->course_name);
-        $this->assertSame(701, $enrollments[0]->course_id);
-        $this->assertSame('701', $mockClient->getLastPendingRequest()->query()->get('filter[has_offer_id]'));
+        $this->assertCount(1, $enrollments);
+        $this->assertSame('Course B', $enrollments[0]->course_name);
+        $this->assertSame(2002, $enrollments[0]->course_id);
+        $this->assertSame('2002:123', $enrollments[0]->id);
+        $this->assertSame('2002', $mockClient->getLastPendingRequest()->query()->get('filter[has_product_id]'));
     }
 
     public function test_find_by_email_picks_the_exact_match_among_partial_hits(): void

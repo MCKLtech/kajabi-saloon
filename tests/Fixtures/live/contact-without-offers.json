@@ -1,0 +1,49 @@
+{
+  "data": {
+    "id": "9300000001",
+    "type": "contacts",
+    "attributes": {
+      "name": "Test Contact",
+      "email": "test.contact@example.com",
+      "address_line_1": null,
+      "address_line_2": null,
+      "address_city": null,
+      "address_country": null,
+      "address_state": null,
+      "address_zip": null,
+      "phone_number": null,
+      "business_number": null,
+      "subscribed": false,
+      "external_user_id": null,
+      "created_at": "2026-10-27T10:00:00.000Z",
+      "updated_at": "2026-10-27T10:00:00.000Z"
+    },
+    "links": {
+      "customer": "https://api.kajabi.com/v1/customers/9400000001"
+    },
+    "relationships": {
+      "site": {
+        "data": {
+          "id": "9000000001",
+          "type": "sites"
+        }
+      },
+      "customer": {
+        "data": {
+          "id": "9400000001",
+          "type": "customers"
+        }
+      },
+      "offers": {
+        "data": [],
+        "links": {
+          "self": "https://api.kajabi.com/v1/contacts/9300000001/relationships/offers"
+        }
+      }
+    }
+  },
+  "links": {
+    "self": "https://api.kajabi.com/v1/contacts/9300000001?include=offers"
+  },
+  "included": []
+}

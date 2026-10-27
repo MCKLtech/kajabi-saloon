@@ -11,12 +11,12 @@ use WooNinja\KajabiSaloon\Requests\Concerns\SupportedFilters;
 use WooNinja\KajabiSaloon\Requests\Contracts\DeclaresSupportedFilters;
 
 /**
- * Get Contacts who have been granted a specific Offer (returns as Enrollments)
+ * Contacts who hold an Offer, as Enrollments: one per contact per course product
  *
  * Endpoint: GET /contacts?filter[has_offer_id]=X
  *
- * This is used for finding all enrollments in a specific course (offer).
- * Returns Enrollment DTOs representing users enrolled in the offer.
+ * Used for a bundle's (offer's) enrollments. A page of N contacts yields
+ * N x (course products in the offer) enrollments.
  */
 class GetContactsWithOffer extends Request implements Paginatable, DeclaresSupportedFilters
 {
@@ -25,14 +25,14 @@ class GetContactsWithOffer extends Request implements Paginatable, DeclaresSuppo
     protected Method $method = Method::GET;
 
     /**
-     * @param array|null $offer The offer resource (data), so enrollments carry its title;
-     *                          without it they're labelled "Offer {id}"
+     * @param array<int, array> $courseProducts The offer's course product resources keyed by id
+     *        (ProductService::courseProductsForOffer())
      */
     public function __construct(
-        private int $offerId,
-        private array $filters = [],
-        private ?string $defaultSiteId = null,
-        private ?array $offer = null,
+        protected int $offerId,
+        protected array $courseProducts,
+        protected array $filters = [],
+        protected ?string $defaultSiteId = null,
     ) {}
 
     public function resolveEndpoint(): string
@@ -42,17 +42,14 @@ class GetContactsWithOffer extends Request implements Paginatable, DeclaresSuppo
 
     protected function defaultQuery(): array
     {
-        $query = [];
-
-        // Add the offer filter
-        $query['filter[has_offer_id]'] = (string) $this->offerId;
+        $query = $this->membershipFilter();
 
         // Don't include offers - it causes timeouts with large datasets
         // We already know the offer_id from the constructor
 
         // Map other filters (pass through as-is)
         foreach ($this->filters as $key => $value) {
-            if ($key !== 'offer_id') { // Don't override our filter
+            if ($key !== 'offer_id' && $key !== 'product_id') { // Don't override our filter
                 $query[$key] = $value;
             }
         }
@@ -65,36 +62,32 @@ class GetContactsWithOffer extends Request implements Paginatable, DeclaresSuppo
         return $query;
     }
 
+    /**
+     * @return array<string, string>
+     */
+    protected function membershipFilter(): array
+    {
+        return ['filter[has_offer_id]' => (string) $this->offerId];
+    }
+
     public function createDtoFromResponse($response): array
     {
-        $data = $response->json('data', []);
+        $offer = ['id' => (string) $this->offerId, 'type' => 'offers'];
+        $enrollments = [];
 
-        // We already know the offer ID from the filter we applied
-        // Create minimal offer data for the Enrollment DTO
-        $offerData = $this->offer ?? [
-            'id' => (string) $this->offerId,
-            'type' => 'offers',
-            'attributes' => [
-                'title' => 'Offer ' . $this->offerId,
-                'price_in_cents' => 0,
-                'subscription' => false,
-            ]
-        ];
+        foreach ($response->json('data', []) as $contact) {
+            foreach ($this->courseProducts as $product) {
+                $enrollments[] = Enrollment::fromKajabiOfferProduct(
+                    $offer,
+                    $product,
+                    (int) $contact['id'],
+                    $contact['attributes']['email'] ?? '',
+                    $contact['attributes']['name'] ?? ''
+                );
+            }
+        }
 
-        // Transform contacts to enrollments
-        return array_map(function ($contact) use ($offerData) {
-            $contactId = (int) $contact['id'];
-            $email = $contact['attributes']['email'] ?? '';
-            $name = $contact['attributes']['name'] ?? '';
-
-            // Create enrollment from minimal offer data and contact info
-            return Enrollment::fromKajabiOffer(
-                $offerData,
-                $contactId,
-                $email,
-                $name
-            );
-        }, $data);
+        return $enrollments;
     }
 
     public static function supportedFilters(): array

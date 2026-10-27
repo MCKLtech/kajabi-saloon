@@ -18,8 +18,8 @@ use WooNinja\LMSContracts\Contracts\DTOs\Products\ProductInterface;
  * - id (offer_id) → id (product_id in dashboard)
  * - title → name
  * - price_in_cents / 100 → price
- * - product_ids[0] → productable_id (first product this offer grants access to)
- * - 'Offer' → productable_type
+ * - id → productable_id (the offer itself)
+ * - 'Bundle' → productable_type (an offer grants one or more courses, like a Thinkific bundle)
  */
 final class Offer implements ProductInterface
 {
@@ -27,8 +27,8 @@ final class Offer implements ProductInterface
         // Required by ProductInterface - standard Thinkific Product fields
         public int     $id,                    // Offer ID (dashboard thinks it's product_id)
         public Carbon  $created_at,
-        public int     $productable_id,        // First product_id from products relationship
-        public string  $productable_type,      // Always 'Course' to maintain compatibility with Thinkific
+        public int     $productable_id,        // The offer id (what $kajabi->bundles takes)
+        public string  $productable_type,      // Always 'Bundle'
         public float   $price,                 // price_in_cents / 100
         public int     $position,              // Position in list
         public string  $status,                // 'published' or 'draft'
@@ -74,10 +74,8 @@ final class Offer implements ProductInterface
 
         // Extract product IDs from relationships
         $productIds = [];
-        $firstProductId = 0;
         if (isset($offer['relationships']['products']['data']) && is_array($offer['relationships']['products']['data'])) {
             $productIds = array_map(fn($product) => (int)$product['id'], $offer['relationships']['products']['data']);
-            $firstProductId = $productIds[0] ?? 0; // Use first product as productable_id
         }
 
         // Calculate price from cents
@@ -116,7 +114,7 @@ final class Offer implements ProductInterface
                 ? Carbon::parse($offer['attributes']['created_at'])
                 : Carbon::now(),
             productable_id: (int)$offer['id'],
-            productable_type: 'course', //Assume everything is a course
+            productable_type: 'Bundle',
             price: $price,
             position: 0, // Offers don't have explicit position
             status: 'published', // Offers are published if they exist

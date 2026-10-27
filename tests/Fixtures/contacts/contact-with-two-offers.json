@@ -1,0 +1,117 @@
+{
+  "data": {
+    "id": "123",
+    "type": "contacts",
+    "attributes": {
+      "name": "John Doe",
+      "email": "john.doe@example.com",
+      "subscribed": false,
+      "created_at": "2024-01-15T10:30:00Z",
+      "updated_at": "2024-01-16T14:20:00Z"
+    },
+    "relationships": {
+      "site": {
+        "data": {
+          "id": "1",
+          "type": "sites"
+        }
+      },
+      "customer": {
+        "data": {
+          "id": "456",
+          "type": "customers"
+        }
+      },
+      "offers": {
+        "data": [
+          {
+            "id": "5001",
+            "type": "offers"
+          },
+          {
+            "id": "5002",
+            "type": "offers"
+          }
+        ],
+        "links": {
+          "self": "https://api.kajabi.com/v1/contacts/123/relationships/offers"
+        }
+      }
+    }
+  },
+  "included": [
+    {
+      "id": "5001",
+      "type": "offers",
+      "attributes": {
+        "title": "All Access",
+        "description": "<p>Everything</p>",
+        "internal_title": "All Access (internal)",
+        "price_in_cents": 0,
+        "payment_type": "free",
+        "token": "offer_all_access",
+        "checkout_url": "https://example.kajabi.com/offers/x/checkout",
+        "recurring_offer": false,
+        "subscription": false,
+        "one_time": false,
+        "single": false,
+        "free": true,
+        "currency": "USD",
+        "created_at": "2024-01-01T00:00:00Z",
+        "updated_at": "2024-01-02T00:00:00Z"
+      },
+      "relationships": {
+        "products": {
+          "data": [
+            {
+              "id": "2001",
+              "type": "products"
+            },
+            {
+              "id": "2002",
+              "type": "products"
+            },
+            {
+              "id": "2003",
+              "type": "products"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "5002",
+      "type": "offers",
+      "attributes": {
+        "title": "Course A Only",
+        "description": "<p>Everything</p>",
+        "internal_title": "Course A Only (internal)",
+        "price_in_cents": 0,
+        "payment_type": "free",
+        "token": "offer_course_a_only",
+        "checkout_url": "https://example.kajabi.com/offers/x/checkout",
+        "recurring_offer": false,
+        "subscription": false,
+        "one_time": false,
+        "single": false,
+        "free": true,
+        "currency": "USD",
+        "created_at": "2024-01-01T00:00:00Z",
+        "updated_at": "2024-01-02T00:00:00Z"
+      },
+      "relationships": {
+        "products": {
+          "data": [
+            {
+              "id": "2001",
+              "type": "products"
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "links": {
+    "self": "https://api.kajabi.com/v1/contacts/123?include=offers"
+  }
+}

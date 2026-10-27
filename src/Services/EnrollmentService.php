@@ -3,7 +3,6 @@
 namespace WooNinja\KajabiSaloon\Services;
 
 use Carbon\Carbon;
-use Saloon\Http\Request;
 use Saloon\Http\Response;
 use Saloon\PaginationPlugin\Paginator;
 use Saloon\Exceptions\Request\RequestException;
@@ -12,16 +11,15 @@ use WooNinja\KajabiSaloon\DataTransferObjects\CourseProgress\CourseProgress;
 use WooNinja\KajabiSaloon\DataTransferObjects\Users\User;
 use Saloon\Exceptions\Request\FatalRequestException;
 use WooNinja\KajabiSaloon\Requests\Offers\GrantOffer;
-use WooNinja\KajabiSaloon\Requests\Offers\RevokeOffer;
 use WooNinja\KajabiSaloon\Requests\Purchases\GetPurchases;
 use WooNinja\KajabiSaloon\Requests\Customers\GetCustomers;
 use WooNinja\KajabiSaloon\Requests\Contacts\GetContactOffers;
-use WooNinja\KajabiSaloon\Requests\Contacts\GetContactsWithOffer;
+use WooNinja\KajabiSaloon\Requests\Contacts\GetContactsWithProduct;
+use WooNinja\KajabiSaloon\Requests\Products\GetProduct;
 use WooNinja\KajabiSaloon\DataTransferObjects\Enrollments\Enrollment;
 use WooNinja\KajabiSaloon\DataTransferObjects\Enrollments\CreateEnrollment;
 use WooNinja\KajabiSaloon\DataTransferObjects\Enrollments\DeleteEnrollment;
 use WooNinja\LMSContracts\Contracts\Services\EnrollmentServiceInterface;
-use WooNinja\LMSContracts\Contracts\DTOs\Users\UserInterface;
 use WooNinja\LMSContracts\Contracts\DTOs\Enrollments\EnrollmentInterface;
 use WooNinja\LMSContracts\Contracts\DTOs\Enrollments\ReadEnrollmentInterface;
 use WooNinja\LMSContracts\Contracts\DTOs\Enrollments\UpdateEnrollmentInterface;
@@ -31,73 +29,51 @@ use WooNinja\LMSContracts\Contracts\DTOs\Enrollments\DeleteEnrollmentInterface;
 /**
  * Enrollment Service for Kajabi
  *
- * CRITICAL ARCHITECTURE:
- * - Works exclusively with CONTACTS (user_id = Contact ID)
- * - Offers are granted DIRECTLY to Contacts (not Customers)
- * - Kajabi automatically creates Customer records when offers are granted
- * - Granting an Offer creates the enrollment
- * - We return Offer data formatted as Enrollments
+ * An enrollment is one contact in one course PRODUCT. A contact holding an
+ * offer is enrolled in each course product the offer grants (communities,
+ * coaching, podcasts and access groups don't count; cohort courses do).
  *
- * KEY CONCEPTS:
- * 1. Grant Offer: POST /v1/contacts/{contact_id}/relationships/offers
- * 2. Revoke Offer: DELETE /v1/contacts/{contact_id}/relationships/offers
- *
- * ENROLLMENT FLOW:
- * 1. Dashboard provides user_id (Contact ID) and course_id (Offer ID)
- * 2. Grant Offer directly to Contact
- * 3. Return Offer data formatted as Enrollment
- *
- * INTERFACE IMPLEMENTATION:
- * - All methods strictly implement EnrollmentServiceInterface
  * - user_id = Contact ID
- * - course_id = Offer ID
- * - enrollment = Offer granted to Contact
+ * - Enrollment::$course_id = Product ID, Enrollment::$id = "{productId}:{contactId}"
+ * - Reads take a PRODUCT id: get(), enrollmentsForCourse(), enrollmentsForUserInCourse(),
+ *   isUserEnrolledInCourse()
+ * - Writes take an OFFER id, since access is granted by offer: create(), createMany(),
+ *   update(), expire(), enroll(), unenroll()
  *
- * This service ONLY uses EnrollmentServiceInterface methods.
+ * Grant: POST /v1/contacts/{contact_id}/relationships/offers
+ * Revoke: DELETE /v1/contacts/{contact_id}/relationships/offers
+ *
+ * Offer -> course products comes from ProductService::courseProductsForOffer(),
+ * cached (KajabiService::setCache()).
  */
 class EnrollmentService extends Resource implements EnrollmentServiceInterface
 {
     /**
      * Get an Enrollment by ID
      *
-     * Uses the user_id (Contact ID) and course_id (Offer ID) from ReadEnrollmentInterface
-     * to check if the contact has access to the offer, and returns it as an enrollment.
+     * Reads the product and contact from a "{productId}:{contactId}" enrollment_id,
+     * else from user_id (Contact ID) and course_id (Product ID).
      *
      * @param ReadEnrollmentInterface $enrollment_id
      * @return EnrollmentInterface
-     * @throws \InvalidArgumentException if contact doesn't have access to offer
+     * @throws \InvalidArgumentException if the contact isn't enrolled in the product
      */
     public function get(ReadEnrollmentInterface $enrollment_id): EnrollmentInterface
     {
-        $contactId = $enrollment_id->user_id;
-        $offerId = $enrollment_id->course_id;
+        [$productId, $contactId] = Enrollment::parseEnrollmentId($enrollment_id->enrollment_id)
+            ?? [$enrollment_id->course_id, $enrollment_id->user_id];
 
-        // Check if user is enrolled in this course (has access to this offer)
-        if (!$this->isUserEnrolledInCourse($contactId, $offerId)) {
+        if ($productId === null || $contactId === null) {
             throw new \InvalidArgumentException(
-                "Contact {$contactId} does not have access to offer {$offerId}"
+                'ReadEnrollmentInterface needs a "{productId}:{contactId}" enrollment_id, or user_id and course_id'
             );
         }
 
-        // Get contact details
-        $userService = new UserService($this->kajabi);
-        $contact = $userService->get($contactId);
-
-        if ($contact === null) {
-            throw new \InvalidArgumentException("Contact ID {$contactId} not found.");
+        foreach ($this->enrollmentsForUserInCourse($contactId, $productId)->items() as $enrollment) {
+            return $enrollment;
         }
 
-        // Fetch the offer details
-        $offerResponse = $this->connector->send(new GetOffer($offerId));
-        $offerData = $offerResponse->json('data');
-
-        // Return offer as enrollment
-        return Enrollment::fromKajabiOffer(
-            $offerData,
-            $contact->id,
-            $contact->email,
-            $contact->first_name . ' ' . $contact->last_name
-        );
+        throw new \InvalidArgumentException("Contact {$contactId} is not enrolled in product {$productId}");
     }
 
     /**
@@ -153,18 +129,37 @@ class EnrollmentService extends Resource implements EnrollmentServiceInterface
     /**
      * Create an Enrollment (grants an OFFER to a CONTACT)
      *
-     * CRITICAL FLOW:
-     * 1. Receive user_id (Contact ID) and course_id (Offer ID)
-     * 2. Get Contact details
-     * 3. Grant Offer to Contact via POST /v1/contacts/{contact_id}/relationships/offers
-     * 4. Fetch the Offer details and return as Enrollment
+     * Returns the enrollment in the offer's first course product; createMany()
+     * returns all of them.
      *
      * @param CreateEnrollmentInterface $enrollment user_id=Contact ID, course_id=Offer ID
      * @return EnrollmentInterface
+     * @throws \UnexpectedValueException when the offer (granted anyway) grants no course products
      * @throws FatalRequestException
      * @throws RequestException|\JsonException
      */
     public function create(CreateEnrollmentInterface $enrollment): EnrollmentInterface
+    {
+        $enrollments = $this->createMany($enrollment);
+
+        if ($enrollments === []) {
+            throw new \UnexpectedValueException(
+                "Offer {$enrollment->course_id} was granted to contact {$enrollment->user_id}, but it grants no course products, so there is no enrollment to return. Use createMany()."
+            );
+        }
+
+        return $enrollments[0];
+    }
+
+    /**
+     * Grant an OFFER to a CONTACT and return one Enrollment per course product it grants
+     *
+     * @param CreateEnrollmentInterface $enrollment user_id=Contact ID, course_id=Offer ID
+     * @return Enrollment[] in the offer's product order; empty when it grants no courses
+     * @throws FatalRequestException
+     * @throws RequestException|\JsonException
+     */
+    public function createMany(CreateEnrollmentInterface $enrollment): array
     {
         $offerId = $enrollment->course_id;  // course_id is Offer ID
         $contactId = $enrollment->user_id;  // user_id is Contact ID
@@ -195,18 +190,21 @@ class EnrollmentService extends Resource implements EnrollmentServiceInterface
         // already has also lands here, so this is the latest grant, not the first.)
         $grantedAt = Carbon::now();
 
-        // Fetch the offer details to return as enrollment
-        $offerResponse = $this->connector->send(new GetOffer($offerId));
-        $offerData = $offerResponse->json('data');
+        // Fresh offer, so the cached offer -> products entry is current too
+        $offer = $this->connector->send(new GetOffer($offerId))->json('data');
+        $products = (new ProductService($this->kajabi))->courseProductsForOffer($offerId, $offer);
 
-        // Create enrollment from offer data
-        return Enrollment::fromKajabiOffer(
-            $offerData,
-            $contact->id,
-            $contact->email,
-            $contact->first_name . ' ' . $contact->last_name,
-            grantedAt: $grantedAt
-        );
+        return array_values(array_map(
+            fn(array $product) => Enrollment::fromKajabiOfferProduct(
+                $offer,
+                $product,
+                $contact->id,
+                $contact->email,
+                $contact->first_name . ' ' . $contact->last_name,
+                grantedAt: $grantedAt
+            ),
+            $products
+        ));
     }
 
     /**
@@ -280,7 +278,7 @@ class EnrollmentService extends Resource implements EnrollmentServiceInterface
     }
 
     /**
-     * Update an Enrollment
+     * Update an Enrollment (course_id = Offer ID)
      *
      * Checks the expiry_date in UpdateEnrollmentInterface:
      * - If expiry_date is in the past, revoke the offer (unenroll)
@@ -307,10 +305,8 @@ class EnrollmentService extends Resource implements EnrollmentServiceInterface
         $shouldUnenroll = $enrollment->expiry_date !== null && $enrollment->expiry_date->isPast();
 
         if ($shouldUnenroll) {
-            // Revoke the offer from the contact
-            return $this->connector->send(
-                new RevokeOffer((string)$contactId, (string)$offerId, $this->getDefaultSiteId())
-            );
+            // Revoke the offer from the contact (a no-op if it isn't held)
+            return $this->revokeOffer($contactId, $offerId);
         } else {
             // Grant the offer to the contact
             return $this->connector->send(
@@ -320,7 +316,11 @@ class EnrollmentService extends Resource implements EnrollmentServiceInterface
     }
 
     /**
-     * Expire an Enrollment (revokes the OFFER from CONTACT)
+     * Expire an Enrollment (revokes the OFFER from CONTACT; course_id = Offer ID)
+     *
+     * Ends every course enrollment that offer granted, except courses another
+     * held offer also grants. Idempotent: an offer that isn't held returns the
+     * contact lookup's response instead of Kajabi's 400; other errors throw.
      *
      * @param DeleteEnrollmentInterface $enrollment_id
      * @return Response
@@ -332,43 +332,35 @@ class EnrollmentService extends Resource implements EnrollmentServiceInterface
         $contactId = $enrollment_id->user_id;
         $offerId = $enrollment_id->course_id;
 
-        // Revoke the offer from the contact
-        return $this->connector->send(
-            new RevokeOffer((string)$contactId, (string)$offerId, $this->getDefaultSiteId())
-        );
+        return $this->revokeOffer($contactId, $offerId);
     }
 
     /**
-     * Find enrollments for a given Course (Offer)
+     * Enrollments in a course Product: one per contact with access to it, by any offer
      *
-     * Uses Kajabi's Contacts API with filter[has_offer_id] to find all contacts
-     * who have been granted this offer. Returns them as Enrollment DTOs.
+     * API: GET /v1/contacts?filter[has_product_id]={course_id}
      *
-     * API: GET /v1/offers/{course_id} (for the title), then GET /v1/contacts?filter[has_offer_id]={course_id}
-     *
-     * @param int $course_id Offer ID
+     * @param int $course_id Product ID
      * @param array $filters
      * @return Paginator
      */
     public function enrollmentsForCourse(int $course_id, array $filters = []): Paginator
     {
-        // One request for the offer, so every enrollment carries its title
-        $offer = $this->connector->send(new GetOffer($course_id))->json('data');
+        // The title, from the cached catalog when it's a course product
+        $product = (new ProductService($this->kajabi))->courseProductResources()[$course_id]
+            ?? $this->connector->send(new GetProduct($course_id))->json('data');
 
         return $this->connector->paginate(
-            new GetContactsWithOffer(
-                $course_id,
-                $filters,
-                $this->getDefaultSiteId(),
-                $offer
-            )
+            new GetContactsWithProduct($product, $filters, $this->getDefaultSiteId())
         );
     }
 
     /**
-     * Find Enrollments for a given User (Contact)
+     * Enrollments of a User (Contact): one per course product across the offers they hold,
+     * de-duplicated by product
      *
-     * Uses GET /v1/contacts/{contact_id}?include=offers (offers with titles, one request)
+     * Uses GET /v1/contacts/{contact_id}?include=offers (one request) plus the cached
+     * offer -> course products lookup. A single page.
      *
      * @param int|string $user_id_or_email Contact ID or email
      * @param array $filters
@@ -376,72 +368,62 @@ class EnrollmentService extends Resource implements EnrollmentServiceInterface
      */
     public function enrollmentsForUser(int|string $user_id_or_email, array $filters = []): Paginator
     {
-        $contact = $this->resolveContact($user_id_or_email);
-
-        if ($contact === null) {
-            return $this->noEnrollments();
-        }
-
-        return $this->connector->paginate(
-            new GetContactOffers(
-                $contact,
-                $filters,
-                $this->getDefaultSiteId()
-            )
-        );
+        return $this->contactEnrollments($user_id_or_email, $filters);
     }
 
     /**
-     * Find Enrollments for a given User (Contact) in a given Course (Offer)
-     *
-     * Note: Filters client-side since Kajabi's Contact→Offers endpoint doesn't support offer_id filtering
+     * The User's (Contact's) enrollment in a course Product, if any offer they hold grants it
      *
      * @param int|string $user_id_or_email Contact ID or email
-     * @param int $course_id Offer ID
+     * @param int $course_id Product ID
      * @param array $filters
      * @return Paginator
      */
     public function enrollmentsForUserInCourse(int|string $user_id_or_email, int $course_id, array $filters = []): Paginator
     {
+        return $this->contactEnrollments($user_id_or_email, $filters, $course_id);
+    }
+
+    /**
+     * Whether any offer the contact holds grants this course Product
+     *
+     * @param int|string $user_id_or_email Contact ID or email
+     * @param int $course_id Product ID
+     * @param array $filters
+     * @return bool
+     */
+    public function isUserEnrolledInCourse(int|string $user_id_or_email, int $course_id, array $filters = []): bool
+    {
+        foreach ($this->enrollmentsForUserInCourse($user_id_or_email, $course_id, $filters)->items() as $enrollment) {
+            return true;
+        }
+
+        return false;
+    }
+
+    private function contactEnrollments(int|string $user_id_or_email, array $filters, ?int $productId = null): Paginator
+    {
         $contact = $this->resolveContact($user_id_or_email);
 
         if ($contact === null) {
             return $this->noEnrollments();
         }
 
-        // Kajabi can't filter a contact's offers, so GetContactOffers filters client-side
+        $products = new ProductService($this->kajabi);
+
         return $this->connector->paginate(
-            new GetContactOffers($contact, $filters, $this->getDefaultSiteId(), $course_id)
+            new GetContactOffers(
+                $contact,
+                fn(int $offerId) => $products->courseProductsForOffer($offerId),
+                $filters,
+                $this->getDefaultSiteId(),
+                $productId
+            )
         );
     }
 
     /**
-     * Determine if contact has existing enrollment in a course (offer)
-     *
-     * Note: Filters client-side by checking offer IDs since API doesn't support filtering
-     *
-     * @param int|string $user_id_or_email Contact ID or email
-     * @param int $course_id Offer ID
-     * @param array $filters
-     * @return bool
-     */
-    public function isUserEnrolledInCourse(int|string $user_id_or_email, int $course_id, array $filters = []): bool
-    {
-        // Get all offers for this contact
-        $enrollments = $this->enrollmentsForUser($user_id_or_email, ['max_pages' => 10]);
-
-        // Check if any enrollment matches the course_id (offer_id)
-        foreach ($enrollments->items() as $enrollment) {
-            if ($enrollment->course_id == $course_id) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    /**
-     * Course progress rows for a Contact in a Course (Offer), one per course product in the offer
+     * Course progress rows for a Contact in an Offer, one per course product in the offer
      *
      * Resolves Contact -> Customer and Offer -> Products, then reads
      * GET /v1/course_progress per product. Products the endpoint doesn't
@@ -451,6 +433,7 @@ class EnrollmentService extends Resource implements EnrollmentServiceInterface
      * @param int|string $user_id_or_email Contact ID or email
      * @param int $course_id Offer ID
      * @return CourseProgress[]
+     * @see CourseProgressService::forCustomer() for one product
      * @throws FatalRequestException
      * @throws RequestException
      */
@@ -488,37 +471,10 @@ class EnrollmentService extends Resource implements EnrollmentServiceInterface
     }
 
     /**
-     * Fill an enrollment's percentage_completed, completed, started_at and completed_at
-     * from course progress (opt-in: costs extra requests, see progress())
-     *
-     * @throws FatalRequestException
-     * @throws RequestException
-     */
-    public function withProgress(EnrollmentInterface $enrollment): EnrollmentInterface
-    {
-        if (!$enrollment instanceof Enrollment) {
-            return $enrollment;
-        }
-
-        return $enrollment->withCourseProgress(
-            $this->progress($enrollment->user_id, $enrollment->course_id)
-        );
-    }
-
-    /**
      * A paginator with no items, for an unknown contact: no customer has id 0 (verified live)
      */
     private function noEnrollments(): Paginator
     {
         return $this->enrollments(['user_id' => 0, 'limit' => 1]);
-    }
-
-    private function resolveContact(int|string $user_id_or_email): ?UserInterface
-    {
-        $userService = new UserService($this->kajabi);
-
-        return is_numeric($user_id_or_email)
-            ? $userService->get((int)$user_id_or_email)
-            : $userService->findByEmail((string)$user_id_or_email);
     }
 }

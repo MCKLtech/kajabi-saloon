@@ -1,0 +1,18 @@
+{
+  "data": {
+    "id": "2003",
+    "type": "products",
+    "attributes": {
+      "created_at": "2024-01-01T00:00:00Z",
+      "title": "Members Area C",
+      "description": null,
+      "status": "ready",
+      "members_aggregate_count": 12,
+      "product_type_name": "AccessGroup",
+      "product_type_id": 77,
+      "publish_status": "published",
+      "thumbnail_url": "https://example.com/t.jpg",
+      "url": "https://example.com/p"
+    }
+  }
+}

@@ -19,7 +19,8 @@
     "saloonphp/pagination-plugin": "^2.2",
     "saloonphp/rate-limit-plugin": "^2.0",
     "nesbot/carbon": "*",
-    "mckltech/lms-contracts": "^1.0"
+    "mckltech/lms-contracts": "^1.0",
+    "psr/simple-cache": "^1.0|^2.0|^3.0"
   },
   "require-dev": {
     "spatie/ray": "*",

@@ -2,8 +2,10 @@
 
 namespace WooNinja\KajabiSaloon\Services;
 
+use Psr\SimpleCache\CacheInterface;
 use Saloon\Contracts\Authenticator;
 use WooNinja\KajabiSaloon\Auth\AccessToken;
+use WooNinja\KajabiSaloon\Cache\ArrayCache;
 use WooNinja\KajabiSaloon\Auth\KajabiAuthenticator;
 use WooNinja\KajabiSaloon\Connectors\KajabiConnector;
 use WooNinja\KajabiSaloon\Interfaces\Kajabi;
@@ -33,6 +35,7 @@ final class KajabiService implements Kajabi, LMSServiceInterface
     public SiteService $sites;
     public WebhookService $webhooks;
     public CourseProgressService $courseProgress;
+    public BundleService $bundles;
     public CustomProfileFieldDefinitionService $customProfileFieldDefinitions;
 
     /**
@@ -45,7 +48,6 @@ final class KajabiService implements Kajabi, LMSServiceInterface
     public CustomProfileFieldDefinitionService $custom_profile_field_definitions;
 
     // Compatibility stub services (Kajabi doesn't support these features)
-    public BundleService $bundles;
     public ChapterService $chapters;
     public ContentService $contents;
     public CouponService $coupons;
@@ -57,6 +59,8 @@ final class KajabiService implements Kajabi, LMSServiceInterface
     public OAuthService $oauth;
     private KajabiConnector|bool $connector = false;
     private Authenticator|bool $authenticator = false;
+    private ?CacheInterface $cache = null;
+    private int $cacheTtl = 86400;
 
     public function __construct(string $clientId, string $clientSecret, ?string $siteId = null)
     {
@@ -80,11 +84,11 @@ final class KajabiService implements Kajabi, LMSServiceInterface
         $this->sites = new SiteService($this);
         $this->webhooks = new WebhookService($this);
         $this->courseProgress = new CourseProgressService($this);
+        $this->bundles = new BundleService($this); // offers as bundles of course products
         $this->customProfileFieldDefinitions = new CustomProfileFieldDefinitionService($this);
         $this->custom_profile_field_definitions = $this->customProfileFieldDefinitions;
 
         // Compatibility stub services (Thinkific features not available in Kajabi)
-        $this->bundles = new BundleService($this);
         $this->chapters = new ChapterService($this);
         $this->contents = new ContentService($this);
         $this->coupons = new CouponService($this);
@@ -277,6 +281,32 @@ final class KajabiService implements Kajabi, LMSServiceInterface
     public function setSiteId(?string $siteId): void
     {
         $this->siteId = $siteId;
+    }
+
+    /**
+     * Cache for slow-changing catalog lookups (which products an offer grants,
+     * which products are courses). Without one, a per-process array cache is
+     * used, so each worker re-reads the catalog once. Keys are
+     * "kajabi:{site}:offer_products:{offerId}" and "kajabi:{site}:course_products".
+     *
+     * ```php
+     * $kajabi->setCache(Cache::store(), 3600);
+     * ```
+     */
+    public function setCache(CacheInterface $cache, int $ttlSeconds = 86400): void
+    {
+        $this->cache = $cache;
+        $this->cacheTtl = $ttlSeconds;
+    }
+
+    public function cache(): CacheInterface
+    {
+        return $this->cache ??= new ArrayCache();
+    }
+
+    public function cacheTtl(): int
+    {
+        return $this->cacheTtl;
     }
 
     // LMSServiceInterface implementation

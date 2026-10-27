@@ -57,11 +57,10 @@ final class Course implements CourseInterface
     }
 
     /**
-     * Create Course from Kajabi Offer API response (NEW ARCHITECTURE)
+     * Create Course from Kajabi Offer API response
      *
-     * CRITICAL: Dashboard browses "Courses" which are actually OFFERS in Kajabi
-     * - Offers are what users enroll in (not products directly)
-     * - This transforms an Offer into a Course DTO for CourseInterface compatibility
+     * @deprecated 3.0 An offer is a bundle of courses now: use ProductService::courses($offerId)
+     *             for its course products. Removed in 4.0.
      */
     public static function fromKajabiOffer(array $offer): self
     {
@@ -101,19 +100,18 @@ final class Course implements CourseInterface
     }
 
     /**
-     * Create Course from Kajabi Product API response (legacy)
+     * Create Course from a Kajabi course product (GET /v1/products or /v1/products/{id})
      *
-     * In Kajabi, "Courses" as Thinkific knows them are actually "Products"
-     * This method transforms a Product response into a Course DTO
-     *
-     * NOTE: As of new architecture, CourseService returns Offers, not Products
-     * This method is kept for backward compatibility if needed
+     * id and product_id are the product id (a course product's id is also its
+     * /v1/courses id). Product resources carry no modules, so chapter_ids,
+     * module_ids and lesson_ids are empty.
      */
     public static function fromKajabiProduct(array $product): self
     {
-        // This is identical to fromKajabiCourse since both endpoints return similar structure
-        // Products are what users enroll in, Courses are the content structure
-        return self::fromKajabiCourse($product);
+        $course = self::fromKajabiCourse($product);
+        $course->product_id ??= $course->id;
+
+        return $course;
     }
 
     /**

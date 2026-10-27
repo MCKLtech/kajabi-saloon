@@ -3,18 +3,18 @@
 namespace WooNinja\KajabiSaloon\DataTransferObjects\Enrollments;
 
 use Carbon\Carbon;
-use WooNinja\KajabiSaloon\DataTransferObjects\CourseProgress\CourseProgress;
-use WooNinja\KajabiSaloon\Services\UserService;
+use WooNinja\KajabiSaloon\DataTransferObjects\Products\Product;
 use WooNinja\LMSContracts\Contracts\DTOs\Enrollments\EnrollmentInterface;
 use WooNinja\LMSContracts\Contracts\DTOs\Users\UserInterface;
 
 /**
+ * One contact in one course product. id is "{productId}:{contactId}" and
+ * course_id the product id, whichever offer grants it.
+ *
  * Progress: $percentage_completed and $completed can't be null under
- * EnrollmentInterface, so $progress_known says whether they are real. It is
- * false from fromKajabiOffer()/fromKajabiPurchase() (Kajabi sends no progress
- * there; the 0.0/false are placeholders) and true once withCourseProgress()
- * has applied course progress rows. Don't persist placeholder progress over
- * real values.
+ * EnrollmentInterface; from offers and purchases they are placeholders and
+ * $progress_known is false. Read real progress per product from
+ * $kajabi->courseProgress (or member activity webhooks) instead.
  */
 final class Enrollment implements EnrollmentInterface
 {
@@ -46,53 +46,55 @@ final class Enrollment implements EnrollmentInterface
     }
 
     /**
-     * Create Enrollment from Kajabi Offer (when offer is granted to a customer)
+     * One course product of an offer the contact holds, as an Enrollment
      *
-     * @param array $offer Offer data from API response
-     * @param int $customerId Customer ID who received the offer
-     * @param string $customerEmail Customer email
-     * @param string $customerName Customer name
-     * @param UserInterface|null $contact
+     * course_id/course_name are the product's; the offer only supplies the
+     * grant. Two offers granting the same product give the same id, so callers
+     * de-duplicate by id.
+     *
+     * @param array $offer Offer resource (JSON:API data); kept for callers, not read
+     * @param array|Product $product Product resource (JSON:API data) or Product DTO
      * @param \DateTimeInterface|null $grantedAt When the offer was granted, if the caller knows (e.g. it
      *        just granted it). Kajabi's offer relationships carry no grant date, so without it
      *        started_at, activated_at and created_at are null rather than a made-up "now".
-     * @return self
      */
-    public static function fromKajabiOffer(
+    public static function fromKajabiOfferProduct(
         array $offer,
-        int $customerId,
-        string $customerEmail,
-        string $customerName,
+        array|Product $product,
+        int $contactId,
+        string $email,
+        string $name,
         ?UserInterface $contact = null,
         ?\DateTimeInterface $grantedAt = null
     ): self
     {
         $granted = $grantedAt !== null ? Carbon::instance($grantedAt) : null;
 
-        $offerId = (int)$offer['id'];
-        $offerTitle = $offer['attributes']['title'] ?? $offer['attributes']['internal_title'] ?? '';
+        [$productId, $productTitle] = $product instanceof Product
+            ? [$product->id, $product->name]
+            : [(int) $product['id'], $product['attributes']['title'] ?? $product['attributes']['name'] ?? ''];
 
-        if (empty($customerEmail) && $contact) {
-            $customerEmail = $contact->email;
+        if (empty($email) && $contact) {
+            $email = $contact->email;
         }
 
-        if (empty($customerName) && $contact) {
-            $customerName = $contact->getFullName();
+        if (empty($name) && $contact) {
+            $name = $contact->getFullName();
         }
 
-        if (empty($customerId) && $contact) {
-            $customerId = $contact->id;
+        if (empty($contactId) && $contact) {
+            $contactId = $contact->id;
         }
 
         return new self(
-            id: self::getEnrollmentId($offerId, $customerId),
-            user_email: $customerEmail,
-            user_name: $customerName,
-            user_id: $customerId, // This is customer_id
-            course_name: $offerTitle,
-            course_id: $offerId, // course_id is offer_id
+            id: self::getEnrollmentId($productId, $contactId),
+            user_email: $email,
+            user_name: $name,
+            user_id: $contactId,
+            course_name: $productTitle,
+            course_id: $productId,
             percentage_completed: 0.0, // placeholder: progress_known is false
-            expired: false,
+            expired: false, // a held offer has no partial or expired state
             is_free_trial: false, //Concept of free trial does not exist in Kajabi
             completed: false,
             started_at: $granted,
@@ -110,70 +112,25 @@ final class Enrollment implements EnrollmentInterface
     }
 
     /**
-     * Copy of this enrollment with real progress from course progress rows
-     *
-     * An offer can grant several courses, so the rows are aggregated by lesson count:
-     * - percentage_completed: completed lessons / total lessons, as a 0.0-1.0 fraction (Thinkific convention)
-     * - completed: every row is complete
-     * - started_at: earliest lesson completion (falls back to the existing value)
-     * - completed_at: latest lesson completion when completed, otherwise null
-     * - updated_at: latest row update (falls back to the existing value)
-     *
-     * Sets progress_known. With no rows (no progress record yet, or no course
-     * products) it's returned unchanged, so progress_known stays as it was.
-     *
-     * @param CourseProgress[] $rows
+     * "{productId}:{contactId}" - a string: concatenated Kajabi ids overflow an int
      */
-    public function withCourseProgress(array $rows): self
+    public static function getEnrollmentId(int $productId, int $contactId): string
     {
-        $enrollment = clone $this;
-
-        if ($rows === []) {
-            return $enrollment;
-        }
-
-        $completedLessons = 0;
-        $totalLessons = 0;
-        $startedAt = [];
-        $completedAt = [];
-        $updatedAt = [];
-
-        foreach ($rows as $row) {
-            $completedLessons += $row->completed_lessons;
-            $totalLessons += $row->total_lessons;
-
-            if ($started = $row->startedAt()) {
-                $startedAt[] = $started;
-            }
-            if ($completed = $row->completedAt()) {
-                $completedAt[] = $completed;
-            }
-            if ($row->updated_at) {
-                $updatedAt[] = $row->updated_at;
-            }
-        }
-
-        $allCompleted = array_reduce($rows, fn(bool $carry, CourseProgress $row) => $carry && $row->completed, true);
-
-        $enrollment->progress_known = true;
-        $enrollment->percentage_completed = $totalLessons > 0
-            ? round($completedLessons / $totalLessons, 4)
-            : ($allCompleted ? 1.0 : 0.0);
-        $enrollment->completed = $allCompleted;
-        $enrollment->started_at = $startedAt !== [] ? Carbon::instance(min($startedAt)) : $this->started_at;
-        $enrollment->completed_at = $allCompleted && $completedAt !== [] ? Carbon::instance(max($completedAt)) : null;
-        $enrollment->updated_at = $updatedAt !== [] ? Carbon::instance(max($updatedAt)) : $this->updated_at;
-
-        if ($allCompleted && $enrollment->status === 'active') {
-            $enrollment->status = 'completed';
-        }
-
-        return $enrollment;
+        return "{$productId}:{$contactId}";
     }
 
-    public static function getEnrollmentId($offerId, $contactId): string
+    /**
+     * Product and contact ids from getEnrollmentId(), or null for any other string
+     *
+     * @return array{0: int, 1: int}|null
+     */
+    public static function parseEnrollmentId(int|string $id): ?array
     {
-        return "{$offerId}{$contactId}";
+        if (!preg_match('/^(\d+):(\d+)$/', (string) $id, $matches)) {
+            return null;
+        }
+
+        return [(int) $matches[1], (int) $matches[2]];
     }
 
     /**
@@ -265,7 +222,7 @@ final class Enrollment implements EnrollmentInterface
         $expiresAt = $purchase['attributes']['expires_at'] ?? null;
 
         return new self(
-            id: self::getEnrollmentId($offerId, $contactId),
+            id: self::getEnrollmentId($courseId, $contactId),
             user_email: $userEmail,
             user_name: $userName,
             user_id: $contactId,

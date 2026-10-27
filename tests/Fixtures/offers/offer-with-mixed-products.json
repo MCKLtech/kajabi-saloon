@@ -1,0 +1,41 @@
+{
+  "data": {
+    "id": "5001",
+    "type": "offers",
+    "attributes": {
+      "title": "All Access",
+      "description": "<p>Everything</p>",
+      "internal_title": "All Access (internal)",
+      "price_in_cents": 0,
+      "payment_type": "free",
+      "token": "offer_all_access",
+      "checkout_url": "https://example.kajabi.com/offers/x/checkout",
+      "recurring_offer": false,
+      "subscription": false,
+      "one_time": false,
+      "single": false,
+      "free": true,
+      "currency": "USD",
+      "created_at": "2024-01-01T00:00:00Z",
+      "updated_at": "2024-01-02T00:00:00Z"
+    },
+    "relationships": {
+      "products": {
+        "data": [
+          {
+            "id": "2001",
+            "type": "products"
+          },
+          {
+            "id": "2002",
+            "type": "products"
+          },
+          {
+            "id": "2003",
+            "type": "products"
+          }
+        ]
+      }
+    }
+  }
+}

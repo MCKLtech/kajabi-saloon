@@ -48,14 +48,12 @@ foreach ($users->items() as $user) {
 
 1. **Products, Not Courses**
    - Kajabi has **Products** (courses, communities, coaching programs, memberships)
-   - What Thinkific calls a "Course" is a "Product" in Kajabi
-   - The library maps `courses` → `products` automatically
+   - A Thinkific "Course" is a Kajabi **course product** (cohort courses included)
 
-2. **Offers Grant Access**
-   - An **Offer** grants access to one or multiple Products
+2. **Offers Are Bundles**
+   - An **Offer** grants access to one or multiple Products, like a Thinkific bundle
    - Enrollments work by granting Offers to Contacts
-   - When you "enroll a user in a course," you're actually "granting an Offer to a Contact"
-   - One Offer can bundle multiple Products together
+   - A contact holding an offer is enrolled in **each course product** it grants (one enrollment per product)
 
 3. **Contacts vs Customers**
    - **Contacts** = All users in your Kajabi site (like Thinkific users)
@@ -64,9 +62,10 @@ foreach ($users->items() as $user) {
 
 4. **Translation Layer**
    - `user_id` = Contact ID
-   - `course_id` = Offer ID (not Product ID!)
-   - `create()` = Grant Offer to Contact (enrollment)
-   - `expire()` = Revoke Offer from Contact (unenrollment)
+   - Enrollment `course_id` = Product ID; enrollment `id` = `"{productId}:{contactId}"`
+   - Enrollment reads (`get()`, `enrollmentsForCourse()`, `enrollmentsForUserInCourse()`, `isUserEnrolledInCourse()`) take a **Product ID**
+   - Enrollment writes (`create()`, `update()`, `expire()`, `enroll()`, `unenroll()`) take an **Offer ID**: access is granted by offer
+   - `$kajabi->products` lists offers (`productable_type` `'Bundle'`); `$kajabi->bundles` takes offer ids
 
 
 ## Authentication
@@ -355,29 +354,30 @@ $kajabi->users->delete(123);
 
 **100% Thinkific Compatible** - Uses the exact same methods and filters!
 
-**IMPORTANT**: In Kajabi, enrollments are managed by granting **Offers** to **Contacts** (users). An Offer can grant access to one or multiple Products.
+**IMPORTANT**: In Kajabi, access is granted by giving **Offers** to **Contacts** (users). An enrollment is one contact in one course **product**: a contact holding an offer that grants three course products has three enrollments, and two offers granting the same product give one. Communities, coaching, podcasts and access groups aren't courses and don't appear.
 
 ```php
 // Get all enrollments (purchases)
 $enrollments = $kajabi->enrollments->enrollments();
 
-// Get enrollments for specific user (by Contact ID or email)
+// One enrollment per course product across the user's offers (Contact ID or email)
 $enrollments = $kajabi->enrollments->enrollmentsForUser(123);
 $enrollments = $kajabi->enrollments->enrollmentsForUser('user@example.com');
 
-// Get enrollments for specific offer
-$enrollments = $kajabi->enrollments->enrollmentsForCourse(456);  // 456 = Offer ID
+// Contacts with access to a course product, by any offer
+$enrollments = $kajabi->enrollments->enrollmentsForCourse(2001);  // 2001 = Product ID
 
-// Get enrollments for user in specific offer
-$enrollments = $kajabi->enrollments->enrollmentsForUserInCourse(123, 456);
+// The user's enrollment in a course product
+$enrollments = $kajabi->enrollments->enrollmentsForUserInCourse(123, 2001);
 
-// Check if user is enrolled
-$isEnrolled = $kajabi->enrollments->isUserEnrolledInCourse(123, 456);
-$isEnrolled = $kajabi->enrollments->isUserEnrolledInCourse('user@example.com', 456);
+// Check if user is enrolled in a course product
+$isEnrolled = $kajabi->enrollments->isUserEnrolledInCourse(123, 2001);
+$isEnrolled = $kajabi->enrollments->isUserEnrolledInCourse('user@example.com', 2001);
 
 // Create enrollment (grants Offer to Contact)
 use WooNinja\KajabiSaloon\DataTransferObjects\Enrollments\CreateEnrollment;
 
+// Returns the enrollment in the offer's first course product
 $enrollment = $kajabi->enrollments->create(
     new CreateEnrollment(
         user_id: 123,        // Contact ID
@@ -385,6 +385,9 @@ $enrollment = $kajabi->enrollments->create(
         activated_at: now()
     )
 );
+
+// Or all of them (empty when the offer grants no courses; create() throws then, after granting)
+$enrollments = $kajabi->enrollments->createMany(new CreateEnrollment(user_id: 123, course_id: 456));
 
 // Expire enrollment (revokes Offer from Contact)
 use WooNinja\KajabiSaloon\DataTransferObjects\Enrollments\DeleteEnrollment;
@@ -396,15 +399,11 @@ $response = $kajabi->enrollments->expire(
     )
 );
 
-// Get specific enrollment (requires both user_id and course_id)
+// Get specific enrollment: by its "{productId}:{contactId}" id, or user_id + course_id (Product ID)
 use WooNinja\KajabiSaloon\DataTransferObjects\Enrollments\ReadEnrollment;
 
-$enrollment = $kajabi->enrollments->get(
-    new ReadEnrollment(
-        user_id: 123,    // Contact ID
-        course_id: 456   // Offer ID
-    )
-);
+$enrollment = $kajabi->enrollments->get(new ReadEnrollment(enrollment_id: '2001:123', user_id: null, course_id: null));
+$enrollment = $kajabi->enrollments->get(new ReadEnrollment(enrollment_id: 0, user_id: 123, course_id: 2001));
 
 // Access enrollment data (Thinkific-compatible interface)
 foreach ($enrollments->items() as $enrollment) {
@@ -424,14 +423,50 @@ $enrollments = $kajabi->enrollments->enrollments([
 ]);
 ```
 
-### Courses
+### Bundles (Offers)
+
+An offer is a bundle; its course products are the bundle's courses. All methods take the **Offer ID**.
 
 ```php
-// Get all courses
+$bundle = $kajabi->bundles->get(456);              // id, name, course_ids (course product ids)
+$courses = $kajabi->bundles->courses(456);         // Paginator of Course DTOs
+$enrollments = $kajabi->bundles->enrollments(456); // contacts holding the offer, one Enrollment per contact per course
+
+$kajabi->bundles->enrollmentsForUser(456, 123);    // Enrollment[]; [] when the contact doesn't hold the offer
+$kajabi->bundles->isUserEnrolled(456, 123);        // also hasActiveEnrollment() / hasAnyEnrollment()
+
+$kajabi->bundles->createEnrollment($createBundleEnrollment); // grant (activated_at / expiry_date ignored)
+$kajabi->bundles->updateEnrollment($updateBundleEnrollment); // no write if held, grants it again if not
+$kajabi->bundles->expireEnrollment(456, 123);                // revoke (idempotent; genuine errors throw)
+
+// The resolver behind all of this (offer products ∩ site course products)
+$productIds = $kajabi->products->courseProductIdsForOffer(456);
+```
+
+Kajabi offers have no expiry, so bundle enrollments are never `expired`.
+
+#### Caching
+
+Which products an offer grants, and which products are courses, are cached for 24 hours by default
+(keys `kajabi:{site}:offer_products:{offerId}` and `kajabi:{site}:course_products`). Without a cache
+each PHP process keeps its own; inject a shared PSR-16 store so workers share it:
+
+```php
+$kajabi->setCache(Cache::store(), 86400); // any Psr\SimpleCache\CacheInterface; TTL in seconds
+```
+
+A product added to an offer, or a new course, shows up once the entry expires (or after you delete the key).
+
+### Courses
+
+Courses are Kajabi course products (`course_id` = Product ID).
+
+```php
+// Get all course products
 $courses = $kajabi->courses->courses(['limit' => 20]);
 
-// Get specific course
-$course = $kajabi->courses->get(123);
+// Get specific course (by Product ID)
+$course = $kajabi->courses->get(2001);
 
 // Access course data
 foreach ($courses->items() as $course) {
@@ -633,9 +668,8 @@ if ($result->isComplete()) {
     $store->put('checkpoint', $result->checkpoint()->toArray());  // later: SyncCheckpoint::fromArray(...)
 }
 
-// Real progress on an enrollment (opt-in; extra requests per call)
-$enrollment = $kajabi->enrollments->withProgress($enrollment);
-echo $enrollment->percentage_completed; // 0.0 - 1.0
+// Progress for one enrollment: its course_id is the product, user -> customer id
+$row = $kajabi->courseProgress->forCustomer($enrollment->course_id, $customerId);
 ```
 
 Errors (all extend `RequestException`, in `WooNinja\KajabiSaloon\Exceptions`):
@@ -648,7 +682,7 @@ Errors (all extend `RequestException`, in `WooNinja\KajabiSaloon\Exceptions`):
 
 `missingFrom()` refuses a full pass that was split across resumed runs (its row ids are partial); stamp rows with `started_at` in the upsert and delete the course's rows stamped earlier instead.
 
-`percentage_completed` on enrollments from offers or purchases is a placeholder: check `$enrollment->progress_known`, which is `true` only once `withProgress()` has applied real course progress. Offer enrollments also leave `started_at`/`activated_at`/`created_at` null unless the grant time is known (`enrollments->create()` records it).
+`percentage_completed` on enrollments from offers or purchases is a placeholder (`$enrollment->progress_known` is `false`): read progress per product from course progress or member activity webhooks. Offer enrollments also leave `started_at`/`activated_at`/`created_at` null unless the grant time is known (`enrollments->create()` records it).
 
 ## Complete Workflow Examples
 
@@ -671,9 +705,9 @@ try {
         echo "✅ User found: {$user->id}\n";
     }
 
-    // Step 2: Enroll in course (offer ID 456)
+    // Step 2: Enroll in the offer (ID 456): one enrollment per course product it grants
     $offerId = 456;
-    if ($kajabi->enrollments->isUserEnrolledInCourse($user->id, $offerId)) {
+    if ($kajabi->bundles->isUserEnrolled($offerId, $user->id)) {
         echo "ℹ️  Already enrolled\n";
     } else {
         $enrollment = $kajabi->enrollments->create(
@@ -686,10 +720,9 @@ try {
         echo "✅ Enrolled successfully\n";
     }
 
-    // Step 3: Verify enrollment
-    $enrollments = $kajabi->enrollments->enrollmentsForUserInCourse($user->id, $offerId);
-    foreach ($enrollments->items() as $enrollment) {
-        echo "📚 Enrollment: {$enrollment->getUserEmail()}\n";
+    // Step 3: Verify enrollment (one per course product of the offer)
+    foreach ($kajabi->bundles->enrollmentsForUser($offerId, $user->id) as $enrollment) {
+        echo "📚 Enrollment: {$enrollment->course_name}\n";
         echo "🎯 Progress: " . round($enrollment->percentage_completed * 100) . "%\n";
     }
 
@@ -784,9 +817,10 @@ This library provides a **drop-in replacement** for Thinkific by mapping Kajabi 
 | Thinkific Service | Kajabi Endpoint | Notes | Compatible Methods |
 |------------------|-----------------|-------|---------------------|
 | Users | `/contacts` | Direct mapping | `get()`, `users()`, `find()`, `findByEmail()`, `create()`, `update()`, `delete()`, `customerIds()` |
-| Enrollments | `/contacts/{id}/relationships/offers` | Offer grants to Contacts | `get()`, `enrollments()`, `create()`, `update()`, `expire()`, `enrollmentsForUser()`, `enrollmentsForCourse()`, `enrollmentsForUserInCourse()`, `isUserEnrolledInCourse()` |
-| Courses | `/offers`, `/courses/{id}` | Offers = Courses; structure from the course | `get()`, `courses()`, `product()`, `structure()`, `lessons()`, `modules()` |
-| Products | `/offers`, `/products` | Offers = Products; Kajabi products separately | `get()`, `products()`, `courses()`, `kajabiProducts()`, `kajabiProduct()`, `courseProducts()` |
+| Enrollments | `/contacts/{id}?include=offers` | One per course product of the offers a Contact holds | `get()`, `enrollments()`, `create()`, `createMany()`, `update()`, `expire()`, `enrollmentsForUser()`, `enrollmentsForCourse()`, `enrollmentsForUserInCourse()`, `isUserEnrolledInCourse()` |
+| Bundles | `/offers`, `/contacts?filter[has_offer_id]` | Offers = Bundles of course products | `get()`, `courses()`, `enrollments()`, `enrollmentsForUser()`, `createEnrollment()`, `updateEnrollment()`, `expireEnrollment()`, `isUserEnrolled()` |
+| Courses | `/products`, `/courses/{id}` | Course products = Courses; structure from the course | `get()`, `courses()`, `product()`, `structure()`, `lessons()`, `modules()` |
+| Products | `/offers`, `/products` | Offers = Products (`'Bundle'`); Kajabi products separately | `get()`, `products()`, `courses()`, `courseProductIdsForOffer()`, `kajabiProducts()`, `kajabiProduct()`, `courseProducts()` |
 | Orders | `/orders` | Purchase history | `get()`, `orders()` |
 | Customers | `/customers` | Auto-created with offers | `get()`, `customers()`, `contactIds()`, `contactIdMap()` |
 | Offers | `/offers` | Grant access to products | `get()`, `offers()` |
@@ -807,9 +841,9 @@ The library automatically transforms Kajabi's JSON:API format to match Thinkific
 ### Enrollment (Purchase) Transformation
 - **Kajabi Purchase** → Thinkific Enrollment DTO
 - **Customer relationship** → `user_id` extracted
-- **Offer relationship** → `course_id` (the offer, matching the Thinkific "course")
+- **Product relationship** → `course_id` (the product; the offer when a purchase has no product); `id` = `"{course_id}:{contact_id}"`
 - **Status** → from `deactivated_at`: `expired` only once it has passed (a future date is a scheduled end, still `active`); `expiry_date` = `deactivated_at`
-- **Default progress** → `percentage_completed` = 0.0 with `progress_known` false (use `$kajabi->enrollments->withProgress()` for real progress)
+- **Default progress** → `percentage_completed` = 0.0 with `progress_known` false (read progress from `$kajabi->courseProgress`)
 
 ### Course Transformation
 - **Product relationship** → `product_id` extracted
@@ -912,6 +946,23 @@ vendor/bin/phpunit --coverage-html coverage
 - ✅ DTO transformations (Kajabi → Thinkific format)
 - ✅ Filter translation
 - ✅ Pagination behavior
+
+### Live API tests
+
+`tests/Integration` runs the bundle/enrollment paths against the real API. It is skipped unless you opt in:
+
+```bash
+KAJABI_LIVE_TESTS=1 vendor/bin/phpunit --testsuite=Integration
+```
+
+Credentials come from `.env` (see `.env.example`). The read tests use whatever offers and products the site has. The write test grants and revokes offers on the contact in `KAJABI_TEST_CONTACT_EMAIL` (created if missing; set `KAJABI_TEST_CONTACT_ID` too, since Kajabi's email search can miss a contact for a few minutes after it's created). Use a contact that exists only for testing: the test returns it to the offers it started with.
+
+What those runs found is replayed offline in `tests/Unit/Services/LiveBundleFindingsTest.php`, from redacted fixtures in `tests/Fixtures/live/`:
+
+- grant and revoke answer **200** `application/vnd.api+json`, with the contact's offers after the change (not 204)
+- revoking an offer the contact doesn't hold is a **400** "Cannot remove relationships". Expiry methods treat that as done once a re-read confirms the offer isn't held, so repeating an expiry is safe; other errors still throw
+- live offers send no `created_at`/`updated_at`
+- `filter[has_offer_id]` and `filter[has_product_id]` really filter `/contacts`
 
 ## API Reference
 

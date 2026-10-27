@@ -1,0 +1,53 @@
+{
+  "data": {
+    "id": "9200000003",
+    "type": "offers",
+    "attributes": {
+      "title": "Offer C",
+      "description": "<p>Offer description</p>",
+      "internal_title": "Offer C (internal)",
+      "currency": "USD",
+      "price_in_cents": 0,
+      "payment_type": "free",
+      "token": "tok0003",
+      "image_url": null,
+      "payment_method": "free",
+      "price_description": "Free",
+      "checkout_url": "https://example.com/offers/tok/checkout",
+      "recurring_offer": false,
+      "subscription": false,
+      "one_time": false,
+      "single": true,
+      "free": true,
+      "plan_changes_enabled": false
+    },
+    "relationships": {
+      "site": {
+        "data": {
+          "id": "9000000001",
+          "type": "sites"
+        }
+      },
+      "products": {
+        "data": [
+          {
+            "id": "9100000102",
+            "type": "products"
+          }
+        ]
+      },
+      "plans": {
+        "data": []
+      },
+      "pricing_options": {
+        "data": []
+      },
+      "forms": {
+        "data": []
+      }
+    }
+  },
+  "links": {
+    "self": "https://api.kajabi.com/v1/offers/9200000003"
+  }
+}

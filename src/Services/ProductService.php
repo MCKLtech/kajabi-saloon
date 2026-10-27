@@ -30,9 +30,10 @@ use WooNinja\LMSContracts\Contracts\DTOs\Products\ProductInterface;
  * - One Offer can include multiple Products
  *
  * For Thinkific compatibility:
- * - "Product" = Offer (what you enroll in)
+ * - "Product" = Offer (what you enroll in), a Bundle: productable_type 'Bundle'
  * - product_id = offer_id
  * - Offer DTO implements ProductInterface
+ * - courses() = the offer's course products, one Course each
  */
 class ProductService extends Resource implements ProductServiceInterface
 {
@@ -67,27 +68,24 @@ class ProductService extends Resource implements ProductServiceInterface
     }
 
     /**
-     * Return the Course(s) associated with a Product
+     * The courses of a Product (an Offer): one Course per course product it grants
      *
-     * Since "Products" are actually Offers in Kajabi, this fetches the Offer
-     * and transforms it into a Course DTO (CourseInterface) for compatibility.
-     * A "Product" (Offer) has one "Course" (itself) that users enroll in.
+     * Communities, coaching, podcasts and access groups are left out; cohort
+     * courses are kept. Course::$id and $product_id are the Kajabi product id.
+     * Built from the cached product catalog (see courseProductsForOffer()), so
+     * module ids aren't loaded: use $kajabi->courses->structure($id) for those.
      *
      * @param int $product_id Offer ID
-     * @return array<Course> Array containing Course DTOs (CourseInterface)
+     * @return array<Course>
      * @throws FatalRequestException
      * @throws RequestException
      */
     public function courses(int $product_id): array
     {
-        // Get the raw Offer response data (not the DTO)
-        $response = $this->connector->send(new GetOffer($product_id));
-        $offerData = $response->json('data');
-
-        // Transform Offer data into Course DTO (CourseInterface) instead of Offer DTO (ProductInterface)
-        $course = Course::fromKajabiOffer($offerData);
-
-        return [$course];
+        return array_values(array_map(
+            fn(array $product) => Course::fromKajabiProduct($product),
+            $this->courseProductsForOffer($product_id)
+        ));
     }
 
     /**
@@ -130,8 +128,106 @@ class ProductService extends Resource implements ProductServiceInterface
     }
 
     /**
+     * Ids of the course products an offer grants, in the offer's order
+     *
+     * The offer's products (GET /v1/offers/{id}) intersected with the site's
+     * course products (GET /v1/products, cohort courses included). Both
+     * lookups are cached for KajabiService::cacheTtl(), so a change to an
+     * offer's products shows up once its entry expires.
+     *
+     * @return int[]
+     * @throws FatalRequestException
+     * @throws RequestException
+     */
+    public function courseProductIdsForOffer(int $offerId): array
+    {
+        return array_keys($this->courseProductsForOffer($offerId));
+    }
+
+    /**
+     * Product resources (JSON:API data) of the course products an offer grants, keyed by id, in the offer's order
+     *
+     * @param array|null $offer The offer resource, when the caller already fetched it (refreshes its cache entry)
+     * @return array<int, array>
+     * @throws FatalRequestException
+     * @throws RequestException
+     */
+    public function courseProductsForOffer(int $offerId, ?array $offer = null): array
+    {
+        $courses = $this->courseProductResources();
+        $granted = [];
+
+        foreach ($this->offerProductIds($offerId, $offer) as $productId) {
+            if (isset($courses[$productId])) {
+                $granted[$productId] = $courses[$productId];
+            }
+        }
+
+        return $granted;
+    }
+
+    /**
+     * Every course product on the site (cohort courses included), keyed by id, cached
+     *
+     * @return array<int, array> product resources (JSON:API data)
+     */
+    public function courseProductResources(): array
+    {
+        $cache = $this->kajabi->cache();
+        $key = $this->cacheKey('course_products');
+        $products = $cache->get($key);
+
+        if (!is_array($products)) {
+            $products = [];
+
+            foreach ($this->kajabiProducts(['limit' => 100]) as $response) {
+                foreach ($response->json('data', []) as $product) {
+                    if (Product::fromKajabiProduct($product)->isCourse()) {
+                        $products[] = $product;
+                    }
+                }
+            }
+
+            $cache->set($key, $products, $this->kajabi->cacheTtl());
+        }
+
+        // Stored as a list: some cache stores don't keep integer keys
+        $byId = [];
+        foreach ($products as $product) {
+            $byId[(int) $product['id']] = $product;
+        }
+
+        return $byId;
+    }
+
+    /**
+     * @return int[] every product the offer grants, course or not
+     */
+    private function offerProductIds(int $offerId, ?array $offer): array
+    {
+        $cache = $this->kajabi->cache();
+        $key = $this->cacheKey("offer_products:{$offerId}");
+
+        if ($offer === null) {
+            $ids = $cache->get($key);
+
+            if (is_array($ids)) {
+                return $ids;
+            }
+
+            $offer = $this->connector->send(new GetOffer($offerId))->json('data');
+        }
+
+        $ids = array_map(fn(array $product) => (int) $product['id'], $offer['relationships']['products']['data'] ?? []);
+        $cache->set($key, $ids, $this->kajabi->cacheTtl());
+
+        return $ids;
+    }
+
+    /**
      * The products that have modules, lessons and course progress - the ones
-     * worth polling. Cohort courses are excluded (they have no progress API).
+     * worth polling. Cohort courses are excluded (they have no progress API);
+     * courseProductsForOffer() keeps them, since a member can still hold one.
      *
      * @return Product[]
      */

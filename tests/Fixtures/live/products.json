@@ -1,0 +1,135 @@
+{
+  "data": [
+    {
+      "id": "9100000001",
+      "type": "products",
+      "attributes": {
+        "created_at": "2024-01-01T00:00:00.000Z",
+        "title": "Course 1",
+        "description": null,
+        "status": "ready",
+        "members_aggregate_count": 10,
+        "product_type_name": "Course",
+        "product_type_id": 9100000001,
+        "publish_status": "published",
+        "thumbnail_url": null,
+        "url": "https://example.com/products/9100000001"
+      }
+    },
+    {
+      "id": "9100000002",
+      "type": "products",
+      "attributes": {
+        "created_at": "2024-01-01T00:00:00.000Z",
+        "title": "Course 2",
+        "description": null,
+        "status": "ready",
+        "members_aggregate_count": 10,
+        "product_type_name": "Course",
+        "product_type_id": 9100000002,
+        "publish_status": "published",
+        "thumbnail_url": null,
+        "url": "https://example.com/products/9100000002"
+      }
+    },
+    {
+      "id": "9100000003",
+      "type": "products",
+      "attributes": {
+        "created_at": "2024-01-01T00:00:00.000Z",
+        "title": "Course 3",
+        "description": null,
+        "status": "ready",
+        "members_aggregate_count": 10,
+        "product_type_name": "Course",
+        "product_type_id": 9100000003,
+        "publish_status": "published",
+        "thumbnail_url": null,
+        "url": "https://example.com/products/9100000003"
+      }
+    },
+    {
+      "id": "9100000004",
+      "type": "products",
+      "attributes": {
+        "created_at": "2024-01-01T00:00:00.000Z",
+        "title": "Course 4",
+        "description": null,
+        "status": "ready",
+        "members_aggregate_count": 10,
+        "product_type_name": "Course",
+        "product_type_id": 9100000004,
+        "publish_status": "published",
+        "thumbnail_url": null,
+        "url": "https://example.com/products/9100000004"
+      }
+    },
+    {
+      "id": "9100000005",
+      "type": "products",
+      "attributes": {
+        "created_at": "2024-01-01T00:00:00.000Z",
+        "title": "Course 5",
+        "description": null,
+        "status": "ready",
+        "members_aggregate_count": 10,
+        "product_type_name": "Course",
+        "product_type_id": 9100000005,
+        "publish_status": "published",
+        "thumbnail_url": null,
+        "url": "https://example.com/products/9100000005"
+      }
+    },
+    {
+      "id": "9100000101",
+      "type": "products",
+      "attributes": {
+        "created_at": "2024-01-01T00:00:00.000Z",
+        "title": "Access Group 1",
+        "description": null,
+        "status": "ready",
+        "members_aggregate_count": 10,
+        "product_type_name": "AccessGroup",
+        "product_type_id": 901,
+        "publish_status": "published",
+        "thumbnail_url": null,
+        "url": "https://example.com/products/9100000101"
+      }
+    },
+    {
+      "id": "9100000102",
+      "type": "products",
+      "attributes": {
+        "created_at": "2024-01-01T00:00:00.000Z",
+        "title": "Access Group 2",
+        "description": null,
+        "status": "ready",
+        "members_aggregate_count": 10,
+        "product_type_name": "AccessGroup",
+        "product_type_id": 902,
+        "publish_status": "published",
+        "thumbnail_url": null,
+        "url": "https://example.com/products/9100000102"
+      }
+    },
+    {
+      "id": "9100000201",
+      "type": "products",
+      "attributes": {
+        "created_at": "2024-01-01T00:00:00.000Z",
+        "title": "Coaching 1",
+        "description": null,
+        "status": "ready",
+        "members_aggregate_count": 10,
+        "product_type_name": "CoachingProgram",
+        "product_type_id": 901,
+        "publish_status": "published",
+        "thumbnail_url": null,
+        "url": "https://example.com/products/9100000201"
+      }
+    }
+  ],
+  "links": {
+    "self": "https://api.kajabi.com/v1/products?page%5Bsize%5D=100"
+  }
+}
