@@ -21,6 +21,14 @@ use WooNinja\KajabiSaloon\Traits\MapperTrait;
 final class KajabiService implements Kajabi, LMSServiceInterface
 {
     use MapperTrait;
+
+    /**
+     * Seconds catalog lookups stay cached by default
+     */
+    public const DEFAULT_CACHE_TTL = 900;
+
+    private const CACHE_VERSION_KEY = 'kajabi:cache_version';
+
     private string $clientId;
     private string $clientSecret;
     private ?string $siteId;
@@ -60,7 +68,7 @@ final class KajabiService implements Kajabi, LMSServiceInterface
     private KajabiConnector|bool $connector = false;
     private Authenticator|bool $authenticator = false;
     private ?CacheInterface $cache = null;
-    private int $cacheTtl = 86400;
+    private int $cacheTtl = self::DEFAULT_CACHE_TTL;
 
     public function __construct(string $clientId, string $clientSecret, ?string $siteId = null)
     {
@@ -284,19 +292,31 @@ final class KajabiService implements Kajabi, LMSServiceInterface
     }
 
     /**
-     * Cache for slow-changing catalog lookups (which products an offer grants,
-     * which products are courses). Without one, a per-process array cache is
-     * used, so each worker re-reads the catalog once. Keys are
-     * "kajabi:{site}:offer_products:{offerId}" and "kajabi:{site}:course_products".
+     * Cache for catalog lookups (which products an offer grants, which products
+     * are courses), for $ttlSeconds (default 15 minutes; 0 turns caching off).
+     * Without one, a per-process array cache is used.
      *
      * ```php
-     * $kajabi->setCache(Cache::store(), 3600);
+     * $kajabi->setCache(Cache::store());   // shared by every worker
+     * $kajabi->setCacheTtl(0);             // or: always ask Kajabi
+     * $kajabi->clearCache();               // after changing offers or courses in Kajabi
      * ```
+     *
+     * Keys look like "kajabi:{version}:{site}:offer_products:{offerId}" and
+     * "kajabi:{version}:{site}:products"; clearCache() changes the version.
      */
-    public function setCache(CacheInterface $cache, int $ttlSeconds = 86400): void
+    public function setCache(CacheInterface $cache, int $ttlSeconds = self::DEFAULT_CACHE_TTL): void
     {
         $this->cache = $cache;
-        $this->cacheTtl = $ttlSeconds;
+        $this->setCacheTtl($ttlSeconds);
+    }
+
+    /**
+     * @param int $ttlSeconds 0 (or less) turns caching off: every lookup goes to Kajabi
+     */
+    public function setCacheTtl(int $ttlSeconds): void
+    {
+        $this->cacheTtl = max(0, $ttlSeconds);
     }
 
     public function cache(): CacheInterface
@@ -307,6 +327,32 @@ final class KajabiService implements Kajabi, LMSServiceInterface
     public function cacheTtl(): int
     {
         return $this->cacheTtl;
+    }
+
+    public function cachingEnabled(): bool
+    {
+        return $this->cacheTtl > 0;
+    }
+
+    /**
+     * Drop every cached Kajabi lookup - every site, and every process sharing
+     * the cache store. Only this SDK's entries: the store's other keys are kept
+     * (CacheInterface::clear() is never called). Old entries are orphaned and
+     * expire on their own TTL.
+     */
+    public function clearCache(): void
+    {
+        $this->cache()->set(self::CACHE_VERSION_KEY, bin2hex(random_bytes(8)));
+    }
+
+    /**
+     * "kajabi:{version}:{site}:{$name}"
+     */
+    public function cacheKey(string $name): string
+    {
+        $version = $this->cache()->get(self::CACHE_VERSION_KEY);
+
+        return 'kajabi:' . (is_string($version) ? $version : '0') . ':' . ($this->siteId ?? 'default') . ':' . $name;
     }
 
     // LMSServiceInterface implementation

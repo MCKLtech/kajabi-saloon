@@ -72,19 +72,20 @@ class ProductService extends Resource implements ProductServiceInterface
      *
      * Communities, coaching, podcasts and access groups are left out; cohort
      * courses are kept. Course::$id and $product_id are the Kajabi product id.
-     * Built from the cached product catalog (see courseProductsForOffer()), so
-     * module ids aren't loaded: use $kajabi->courses->structure($id) for those.
+     * Built from the product catalog (see courseProductsForOffer()), so module
+     * ids aren't loaded: use $kajabi->courses->structure($id) for those.
      *
      * @param int $product_id Offer ID
+     * @param bool $fresh Skip the cache and read the offer and catalog from Kajabi
      * @return array<Course>
      * @throws FatalRequestException
      * @throws RequestException
      */
-    public function courses(int $product_id): array
+    public function courses(int $product_id, bool $fresh = false): array
     {
         return array_values(array_map(
             fn(array $product) => Course::fromKajabiProduct($product),
-            $this->courseProductsForOffer($product_id)
+            $this->courseProductsForOffer($product_id, fresh: $fresh)
         ));
     }
 
@@ -131,35 +132,51 @@ class ProductService extends Resource implements ProductServiceInterface
      * Ids of the course products an offer grants, in the offer's order
      *
      * The offer's products (GET /v1/offers/{id}) intersected with the site's
-     * course products (GET /v1/products, cohort courses included). Both
-     * lookups are cached for KajabiService::cacheTtl(), so a change to an
-     * offer's products shows up once its entry expires.
+     * course products (GET /v1/products, cohort courses included). Both are
+     * cached for KajabiService::cacheTtl() (15 minutes by default). A product
+     * the cached catalog has never seen (a course added since) reloads the
+     * catalog; a product added to the offer shows up once its entry expires,
+     * on $fresh, or after $kajabi->clearCache().
      *
+     * @param bool $fresh Skip the cache (the fresh result is cached)
      * @return int[]
      * @throws FatalRequestException
      * @throws RequestException
      */
-    public function courseProductIdsForOffer(int $offerId): array
+    public function courseProductIdsForOffer(int $offerId, bool $fresh = false): array
     {
-        return array_keys($this->courseProductsForOffer($offerId));
+        return array_keys($this->courseProductsForOffer($offerId, fresh: $fresh));
     }
 
     /**
      * Product resources (JSON:API data) of the course products an offer grants, keyed by id, in the offer's order
      *
      * @param array|null $offer The offer resource, when the caller already fetched it (refreshes its cache entry)
+     * @param bool $fresh Skip the cache (the fresh result is cached)
      * @return array<int, array>
      * @throws FatalRequestException
      * @throws RequestException
      */
-    public function courseProductsForOffer(int $offerId, ?array $offer = null): array
+    public function courseProductsForOffer(int $offerId, ?array $offer = null, bool $fresh = false): array
     {
-        $courses = $this->courseProductResources();
+        $productIds = $this->offerProductIds($offerId, $offer, $fresh);
+        $catalog = $this->productCatalog($fresh);
+
+        // A product the cached catalog doesn't know was added since it was cached.
+        // Products still unknown after a reload (deleted ones) are remembered, so
+        // they don't reload the catalog on every call.
+        $unknown = array_values(array_diff($productIds, array_keys($catalog)));
+
+        if (!$fresh && $this->kajabi->cachingEnabled() && array_diff($unknown, $this->unknownProductIds()) !== []) {
+            $catalog = $this->productCatalog(true);
+            $this->addUnknownProductIds(array_diff($productIds, array_keys($catalog)));
+        }
+
         $granted = [];
 
-        foreach ($this->offerProductIds($offerId, $offer) as $productId) {
-            if (isset($courses[$productId])) {
-                $granted[$productId] = $courses[$productId];
+        foreach ($productIds as $productId) {
+            if (isset($catalog[$productId]) && self::isCourse($catalog[$productId])) {
+                $granted[$productId] = $catalog[$productId];
             }
         }
 
@@ -167,29 +184,34 @@ class ProductService extends Resource implements ProductServiceInterface
     }
 
     /**
-     * Every course product on the site (cohort courses included), keyed by id, cached
+     * Every course product on the site (cohort courses included), keyed by id
+     *
+     * @param bool $fresh Skip the cache (the fresh result is cached)
+     * @return array<int, array> product resources (JSON:API data)
+     */
+    public function courseProductResources(bool $fresh = false): array
+    {
+        return array_filter($this->productCatalog($fresh), [self::class, 'isCourse']);
+    }
+
+    /**
+     * Every product on the site, keyed by id, cached
      *
      * @return array<int, array> product resources (JSON:API data)
      */
-    public function courseProductResources(): array
+    private function productCatalog(bool $fresh): array
     {
-        $cache = $this->kajabi->cache();
-        $key = $this->cacheKey('course_products');
-        $products = $cache->get($key);
-
-        if (!is_array($products)) {
+        $products = $this->remember('products', function () {
             $products = [];
 
             foreach ($this->kajabiProducts(['limit' => 100]) as $response) {
                 foreach ($response->json('data', []) as $product) {
-                    if (Product::fromKajabiProduct($product)->isCourse()) {
-                        $products[] = $product;
-                    }
+                    $products[] = $product;
                 }
             }
 
-            $cache->set($key, $products, $this->kajabi->cacheTtl());
-        }
+            return $products;
+        }, $fresh);
 
         // Stored as a list: some cache stores don't keep integer keys
         $byId = [];
@@ -201,27 +223,41 @@ class ProductService extends Resource implements ProductServiceInterface
     }
 
     /**
+     * @return int[] product ids a fresh catalog didn't have either
+     */
+    private function unknownProductIds(): array
+    {
+        return $this->remember('unknown_products', fn() => []);
+    }
+
+    /**
+     * @param int[] $ids
+     */
+    private function addUnknownProductIds(array $ids): void
+    {
+        $known = $this->unknownProductIds();
+        $this->remember('unknown_products', fn() => array_values(array_unique(array_merge($known, $ids))), fresh: true);
+    }
+
+    private static function isCourse(array $product): bool
+    {
+        return Product::fromKajabiProduct($product)->isCourse();
+    }
+
+    /**
      * @return int[] every product the offer grants, course or not
      */
-    private function offerProductIds(int $offerId, ?array $offer): array
+    private function offerProductIds(int $offerId, ?array $offer, bool $fresh): array
     {
-        $cache = $this->kajabi->cache();
-        $key = $this->cacheKey("offer_products:{$offerId}");
+        return $this->remember(
+            "offer_products:{$offerId}",
+            function () use ($offerId, $offer) {
+                $offer ??= $this->connector->send(new GetOffer($offerId))->json('data');
 
-        if ($offer === null) {
-            $ids = $cache->get($key);
-
-            if (is_array($ids)) {
-                return $ids;
-            }
-
-            $offer = $this->connector->send(new GetOffer($offerId))->json('data');
-        }
-
-        $ids = array_map(fn(array $product) => (int) $product['id'], $offer['relationships']['products']['data'] ?? []);
-        $cache->set($key, $ids, $this->kajabi->cacheTtl());
-
-        return $ids;
+                return array_map(fn(array $product) => (int) $product['id'], $offer['relationships']['products']['data'] ?? []);
+            },
+            $fresh || $offer !== null
+        );
     }
 
     /**

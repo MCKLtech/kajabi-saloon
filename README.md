@@ -447,15 +447,27 @@ Kajabi offers have no expiry, so bundle enrollments are never `expired`.
 
 #### Caching
 
-Which products an offer grants, and which products are courses, are cached for 24 hours by default
-(keys `kajabi:{site}:offer_products:{offerId}` and `kajabi:{site}:course_products`). Without a cache
-each PHP process keeps its own; inject a shared PSR-16 store so workers share it:
+Which products an offer grants, and the site's product catalog, are cached for **15 minutes** by
+default. Without a cache each PHP process keeps its own; inject a shared PSR-16 store so workers share it:
 
 ```php
-$kajabi->setCache(Cache::store(), 86400); // any Psr\SimpleCache\CacheInterface; TTL in seconds
+$kajabi->setCache(Cache::store());          // any Psr\SimpleCache\CacheInterface; 15 min TTL
+$kajabi->setCache(Cache::store(), 300);     // or your own TTL in seconds
+$kajabi->setCacheTtl(0);                    // caching off: every lookup asks Kajabi
+
+$kajabi->products->courses($offerId, fresh: true);                 // bypass for one call (result re-cached)
+$kajabi->products->courseProductIdsForOffer($offerId, fresh: true);
+
+$kajabi->clearCache();                      // drop everything: all sites, every worker sharing the store
 ```
 
-A product added to an offer, or a new course, shows up once the entry expires (or after you delete the key).
+- A course created after the catalog was cached is picked up as soon as an offer lists it: a product id
+  the cached catalog has never seen reloads the catalog (once; ids still missing afterwards are remembered).
+- A product added to or removed from an **existing** offer shows up when that offer's entry expires, on
+  `fresh: true`, or after `clearCache()`. `enrollments->create()` and `bundles->get()` always read the offer fresh.
+- `clearCache()` changes a version token in the store rather than calling `CacheInterface::clear()`, so the
+  host's other keys survive; the orphaned entries expire on their TTL. Keys look like
+  `kajabi:{version}:{site}:offer_products:{offerId}` and `kajabi:{version}:{site}:products`.
 
 ### Courses
 

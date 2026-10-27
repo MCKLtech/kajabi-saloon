@@ -1,5 +1,19 @@
 # Changelog
 
+## 3.1.0
+
+### Changed
+
+- The catalog cache defaults to **15 minutes** (`KajabiService::DEFAULT_CACHE_TTL = 900`), down from 24 hours, including for `setCache($store)` without a TTL.
+- The whole product catalog is cached (key `products`), not just course products. When an offer lists a product the cached catalog has never seen, such as a course created since, the catalog is reloaded once. Ids still missing after the reload are remembered, so they don't trigger a reload on every call.
+- Cache keys now include a version: `kajabi:{version}:{site}:...`. Entries written by 3.0.0 are simply not read again.
+
+### Added
+
+- `$kajabi->clearCache()` drops every cached Kajabi lookup, for all sites and every worker sharing the store. It works by changing a version token in the store; `CacheInterface::clear()` is never called, so the host's other keys are kept.
+- `$kajabi->setCacheTtl(int)`: `0` turns caching off. `cachingEnabled()` reports whether caching is on.
+- A `fresh: true` option on `ProductService::courses()`, `courseProductIdsForOffer()`, `courseProductsForOffer()` and `courseProductResources()` bypasses the cache for that call and re-caches the result.
+
 ## 3.0.0
 
 An offer is a bundle, a Kajabi course product is a course, and a contact who holds an offer is enrolled in each course product it grants.

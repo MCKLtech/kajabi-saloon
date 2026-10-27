@@ -33,11 +33,31 @@ abstract class Resource
     }
 
     /**
-     * "kajabi:{site}:{$name}", so sites sharing a cache store don't collide
+     * $load()'s result, cached for KajabiService::cacheTtl() (not at all when caching is off)
+     *
+     * @param bool $fresh Ignore the cached value; the fresh one is still stored
      */
-    protected function cacheKey(string $name): string
+    protected function remember(string $name, callable $load, bool $fresh = false): array
     {
-        return 'kajabi:' . ($this->getDefaultSiteId() ?? 'default') . ':' . $name;
+        if (!$this->kajabi->cachingEnabled()) {
+            return $load();
+        }
+
+        $cache = $this->kajabi->cache();
+        $key = $this->kajabi->cacheKey($name);
+
+        if (!$fresh) {
+            $value = $cache->get($key);
+
+            if (is_array($value)) {
+                return $value;
+            }
+        }
+
+        $value = $load();
+        $cache->set($key, $value, $this->kajabi->cacheTtl());
+
+        return $value;
     }
 
     /**

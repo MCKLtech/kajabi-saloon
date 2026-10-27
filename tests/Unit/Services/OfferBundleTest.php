@@ -362,9 +362,9 @@ class OfferBundleTest extends TestCase
         $this->assertSame([2001, 2002], $sameSite->products->courseProductIdsForOffer(5001));
         $second->assertNothingSent();
 
-        $this->assertTrue($cache->has('kajabi:111:offer_products:5001'));
-        $this->assertTrue($cache->has('kajabi:111:course_products'));
-        $this->assertFalse($cache->has('kajabi:222:course_products'));
+        $this->assertTrue($cache->has('kajabi:0:111:offer_products:5001'));
+        $this->assertTrue($cache->has('kajabi:0:111:products'));
+        $this->assertFalse($cache->has('kajabi:0:222:products'));
     }
 
     public function test_course_products_include_cohort_courses(): void
